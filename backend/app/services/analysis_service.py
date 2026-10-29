@@ -169,7 +169,13 @@ def _hour_key(timestamp: datetime) -> datetime:
 
 def _trend_and_spike(
     posts: list[Post],
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None, bool, str | None]:
+) -> tuple[
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+    bool,
+    str | None,
+    dict[str, Any] | None,
+]:
     counts: dict[datetime, int] = defaultdict(int)
     posts_by_hour: dict[datetime, list[Post]] = defaultdict(list)
     for post in posts:
@@ -185,7 +191,7 @@ def _trend_and_spike(
         trend.append({"timestamp": cursor.isoformat(), "count": counts.get(cursor, 0)})
         cursor += timedelta(hours=1)
 
-    candidate: tuple[datetime, float, float, float] | None = None
+    candidate: tuple[datetime, float, float, float, int, int, float] | None = None
     for index, point in enumerate(trend):
         if index < MIN_BASELINE_HOURS:
             continue
@@ -207,6 +213,9 @@ def _trend_and_spike(
                 score,
                 mean,
                 standard_deviation,
+                len(baseline),
+                baseline_total,
+                threshold,
             )
 
     if candidate is None:
@@ -218,13 +227,36 @@ def _trend_and_spike(
             return trend, None, False, (
                 "A spike alert was not generated because the dataset does not contain "
                 "at least 24 prior hourly bins and 20 baseline posts."
-            )
-        return trend, None, True, None
+            ), None
+        return trend, None, True, None, None
 
-    spike_hour, score, baseline_mean, baseline_stddev = candidate
+    (
+        spike_hour,
+        score,
+        baseline_mean,
+        baseline_stddev,
+        baseline_hours,
+        baseline_post_count,
+        required_count,
+    ) = candidate
     spike_posts = sorted(posts_by_hour[spike_hour], key=lambda post: post.timestamp)
     observed_count = len(spike_posts)
     severity = "high" if observed_count >= max(10, baseline_mean * 4) else "medium"
+    volume_review = {
+        "interval_start": spike_hour.isoformat(),
+        "interval_end": (spike_hour + timedelta(hours=1)).isoformat(),
+        "baseline_hours": baseline_hours,
+        "baseline_post_count": baseline_post_count,
+        "baseline_mean": round(baseline_mean, 4),
+        "baseline_standard_deviation": round(baseline_stddev, 4),
+        "required_count": round(required_count, 4),
+        "observed_count": observed_count,
+        "standard_score": round(score, 4),
+        "observed_to_baseline_ratio": round(
+            observed_count / baseline_mean if baseline_mean else 0,
+            4,
+        ),
+    }
     alert = {
         "narrative_key": "hourly_volume_spike",
         "severity": severity,
@@ -240,7 +272,7 @@ def _trend_and_spike(
             _evidence(post) for post in spike_posts[:MAX_SPIKE_EVIDENCE]
         ],
     }
-    return trend, alert, True, None
+    return trend, alert, True, None, volume_review
 
 
 def analyze_posts(posts: list[Post]) -> tuple[dict[str, Any], dict[str, Any] | None]:
@@ -249,7 +281,9 @@ def analyze_posts(posts: list[Post]) -> tuple[dict[str, Any], dict[str, Any] | N
 
     ordered_posts = sorted(posts, key=lambda post: post.timestamp)
     narratives, similarity_warning = _similar_narratives(ordered_posts)
-    trend, alert, baseline_sufficient, baseline_warning = _trend_and_spike(ordered_posts)
+    trend, alert, baseline_sufficient, baseline_warning, volume_review = _trend_and_spike(
+        ordered_posts
+    )
 
     start = _evidence(ordered_posts[0])["timestamp"]
     end = _evidence(ordered_posts[-1])["timestamp"]
@@ -270,6 +304,7 @@ def analyze_posts(posts: list[Post]) -> tuple[dict[str, Any], dict[str, Any] | N
         },
         "trend": trend,
         "narratives": narratives,
+        "volume_review": volume_review,
         "warnings": warnings,
         "methodology": (
             "Narrative groups use normalized-token TF-IDF cosine similarity and connected "
