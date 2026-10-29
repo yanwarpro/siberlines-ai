@@ -63,6 +63,15 @@ def test_analysis_runs_on_supplied_dataset_and_can_be_reloaded(
     assert max(point["count"] for point in metrics["trend"]) == 25
     assert any("Jembatan Kenanga" in group["representative_text"] for group in metrics["narratives"])
     assert result["alerts"][0]["observed_count"] == 25
+    alert_evidence_ids = {
+        evidence["post_id"] for evidence in result["alerts"][0]["evidence_json"]
+    }
+    assert any(
+        alert_evidence_ids.intersection(
+            evidence["post_id"] for evidence in group["evidence"]
+        )
+        for group in metrics["narratives"]
+    )
     assert "expected_topic" not in str(metrics)
     assert "dataset_label" not in str(metrics)
 
