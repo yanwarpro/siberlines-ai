@@ -8,6 +8,7 @@ from typing import Any
 
 REQUIRED_COLUMNS = {"timestamp", "text"}
 OPTIONAL_COLUMNS = {"source_id", "external_id"}
+IGNORED_COLUMNS = {"dataset_label", "expected_topic"}
 COLUMN_ALIASES = {
     "created_at": "timestamp",
     "date": "timestamp",
@@ -83,14 +84,16 @@ def parse_posts_csv(content: bytes) -> ParsedPosts:
         raise ValueError(
             "CSV is missing required columns: " + ", ".join(sorted(missing_columns))
         )
-    unexpected_columns = set(normalized_headers) - REQUIRED_COLUMNS - OPTIONAL_COLUMNS
+    unexpected_columns = (
+        set(normalized_headers) - REQUIRED_COLUMNS - OPTIONAL_COLUMNS - IGNORED_COLUMNS
+    )
     if unexpected_columns:
         raise ValueError(
             "CSV contains unsupported columns: " + ", ".join(sorted(unexpected_columns))
         )
 
     posts: list[dict[str, Any]] = []
-    seen_hashes: set[str] = set()
+    seen_external_ids: set[tuple[str | None, str]] = set()
     rows_received = 0
     duplicates_skipped = 0
     try:
@@ -123,10 +126,12 @@ def parse_posts_csv(content: bytes) -> ParsedPosts:
 
             canonical_text = " ".join(post_text.split())
             content_hash = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
-            if content_hash in seen_hashes:
-                duplicates_skipped += 1
-                continue
-            seen_hashes.add(content_hash)
+            if external_id is not None:
+                identity = (source_id, external_id)
+                if identity in seen_external_ids:
+                    duplicates_skipped += 1
+                    continue
+                seen_external_ids.add(identity)
             posts.append(
                 {
                     "timestamp": timestamp,

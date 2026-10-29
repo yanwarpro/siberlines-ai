@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -11,7 +11,14 @@ from app.db.base import Base
 class Post(Base):
     __tablename__ = "posts"
     __table_args__ = (
-        UniqueConstraint("dataset_id", "content_hash", name="uq_posts_dataset_content_hash"),
+        Index(
+            "uq_posts_dataset_source_external_id",
+            "dataset_id",
+            text("coalesce(source_id, '')"),
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
