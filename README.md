@@ -8,16 +8,25 @@ SIBERLENS AI is a defensive social cyber intelligence early-warning prototype. T
 backend/
   alembic/                 Database migration environment and revisions
   app/
-    api/v1/                Versioned HTTP routes
+    api/                   Versioned health endpoint
     core/                  Environment-backed settings
     db/                    SQLAlchemy engine and session
     models/                SQLAlchemy data models
+    schemas/               Pydantic read schemas
+    services/              Scope notes for deferred processing services
   tests/                   Backend tests
 frontend/
   src/
     api/                   Typed HTTP client
-    components/            Dashboard shell
+    components/            Reusable dashboard components
+    pages/                 Overview, dataset, analysis, and alert views
     types/                 API response types
+    styles/                Global Tailwind stylesheet
+  tests/                   Frontend test plan
+data/
+  samples/                 Synthetic fixture output (not committed)
+docs/                      Proposal, architecture, test plan, demo script
+scripts/                   Local development utilities
 ```
 
 ## Requirements
@@ -50,6 +59,18 @@ The API is available at `http://localhost:8000`; interactive API documentation i
 pytest
 ```
 
+### Docker Compose alternative
+
+For a containerized PostgreSQL and API, copy `.env.example` to `.env`, replace all credential placeholders, and run from the repository root:
+
+```powershell
+docker compose up --build
+```
+
+Compose waits for PostgreSQL, applies migrations, and starts the API. Stop services with `Ctrl+C`, then run `docker compose down`; add `-v` only when intentionally deleting the local PostgreSQL volume and its data.
+
+The Compose stack does not include the frontend container. Run Vite using the frontend commands below.
+
 The health endpoint is `GET http://localhost:8000/api/v1/health`. It reports application liveness and does not claim that PostgreSQL is reachable.
 
 ### 2. Run the frontend
@@ -64,7 +85,7 @@ npm run dev
 
 Open the Vite URL (normally `http://localhost:5173`). Set `VITE_API_BASE_URL` in the frontend environment when the API is hosted somewhere other than `http://localhost:8000/api/v1`. Vite reads its own `.env` files from `frontend/`.
 
-The backend reads `DATABASE_URL` and `CORS_ORIGINS` from the process environment or a `.env` file in the working directory. `CORS_ORIGINS` is a comma-separated allowlist of exact origins; wildcard origins are not accepted. The default allowlist is `http://localhost:5173`.
+The backend reads `DATABASE_URL` and `CORS_ORIGINS` from the process environment or a root `.env` file. `DATABASE_URL_DOCKER` configures the API container's database connection through the Compose service name. `CORS_ORIGINS` is a comma-separated allowlist of exact origins; wildcard origins are not accepted. The example allows `http://localhost:5173` and `http://127.0.0.1:5173`.
 
 ## Database schema
 
@@ -82,7 +103,7 @@ Apply migrations with `alembic upgrade head` from `backend/`. To roll the schema
 ### Backend and PostgreSQL
 
 1. Provision a managed PostgreSQL instance from your hosting provider and create a database/user with least-privilege access.
-2. Deploy the `backend/` directory as a Python 3.11 application. Install with `pip install .` and run `uvicorn app.main:app --host 0.0.0.0 --port $PORT` from that directory (adapt the port variable syntax to the provider).
+2. Deploy the `backend/` directory as a Python 3.10+ application. Install with `pip install .` and run `uvicorn app.main:app --host 0.0.0.0 --port $PORT` from that directory (adapt the port variable syntax to the provider).
 3. Configure `DATABASE_URL` as a secret environment variable using the provider's PostgreSQL connection URL. Use `postgresql+psycopg://` and URL-encode reserved characters in credentials.
 4. Configure `CORS_ORIGINS` to the exact deployed frontend origin(s), without a trailing path or wildcard.
 5. Run `alembic upgrade head` as a release/pre-deploy command from `backend/` before routing traffic to the new version.
@@ -99,4 +120,6 @@ Never put database credentials or other server secrets in frontend variables; Vi
 
 ## Checks
 
-From `backend/`, run `pytest`. From `frontend/`, run `npm run build` and `npm run lint`.
+The architecture, scope proposal, verification plan, and demo walkthrough are in `docs/`. To write an explicitly synthetic local CSV fixture, run `python scripts/generate_demo_dataset.py` from the repository root. The generated file is ignored by Git and is not loaded by the application.
+
+From `backend/`, run `python -m pytest`. From `frontend/`, run `npm run build` and `npm run lint`. Analytics, data ingestion, and report generation remain unimplemented; their planned service layer is intentionally documented rather than filled with placeholder results.

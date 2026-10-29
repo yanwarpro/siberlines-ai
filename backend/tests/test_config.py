@@ -50,3 +50,9 @@ def test_cors_origins_read_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cors_origins_reject_wildcard() -> None:
     with pytest.raises(ValidationError, match="Wildcard CORS origins are not allowed"):
         Settings(_env_file=None, cors_origins=["*"])
+
+
+def test_cors_origins_reject_paths_and_embedded_wildcards() -> None:
+    for origin in ("https://app.example/path", "https://*.example"):
+        with pytest.raises(ValidationError, match="Invalid exact CORS origin"):
+            Settings(_env_file=None, cors_origins=[origin])

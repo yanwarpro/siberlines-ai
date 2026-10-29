@@ -17,6 +17,7 @@ venv/
 node_modules/
 frontend/dist/
 frontend/.vite/
+data/samples/*.csv
 
 # Editors and OS
 .vscode/
