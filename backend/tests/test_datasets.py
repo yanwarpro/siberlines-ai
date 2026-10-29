@@ -42,7 +42,7 @@ def test_upload_csv_creates_dataset_and_posts(
         assert len(post.content_hash) == 64
 
 
-def test_upload_counts_and_skips_duplicate_content(
+def test_upload_preserves_repeated_text_and_ignores_evaluation_labels(
     api_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
     test_client, test_session = api_client
@@ -51,10 +51,42 @@ def test_upload_counts_and_skips_duplicate_content(
         files={
             "file": (
                 "duplicates.csv",
-                "timestamp,text,source_id\n"
-                "2026-10-29T10:00:00Z,Repeated text,source-a\n"
-                "2026-10-29T10:05:00Z,Repeated   text,source-b\n"
-                "2026-10-29T10:10:00Z,Different text,source-a\n",
+                "external_id,timestamp,source_id,text,dataset_label,expected_topic\n"
+                "post-1,2026-10-29T10:00:00Z,source-a,Repeated text,SYNTHETIC_TEST_ONLY,topic-a\n"
+                "post-2,2026-10-29T10:05:00Z,source-b,Repeated   text,SYNTHETIC_TEST_ONLY,topic-b\n"
+                "post-3,2026-10-29T10:10:00Z,source-a,Different text,SYNTHETIC_TEST_ONLY,topic-a\n",
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["rows_received"] == 3
+    assert response.json()["rows_inserted"] == 3
+    assert response.json()["duplicates_skipped"] == 0
+
+    with test_session() as session:
+        dataset = session.scalar(select(Dataset))
+        posts = session.scalars(select(Post)).all()
+        assert dataset is not None
+        assert dataset.row_count == 3
+        assert len(posts) == 3
+        assert len({post.content_hash for post in posts}) == 2
+
+
+def test_upload_skips_repeated_external_identity_only(
+    api_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, test_session = api_client
+    response = test_client.post(
+        "/api/v1/datasets/upload",
+        files={
+            "file": (
+                "repeated-identity.csv",
+                "external_id,timestamp,source_id,text\n"
+                "post-1,2026-10-29T10:00:00Z,source-a,Repeated text\n"
+                "post-1,2026-10-29T10:05:00Z,source-a,Repeated text\n"
+                "post-1,2026-10-29T10:10:00Z,source-b,Repeated text\n",
                 "text/csv",
             )
         },
