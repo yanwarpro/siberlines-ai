@@ -5,12 +5,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
 COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
-
-RUN pip install --no-cache-dir .
 
 EXPOSE 8000
 

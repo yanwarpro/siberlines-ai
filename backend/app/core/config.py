@@ -4,6 +4,8 @@ from pathlib import Path
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.security import parse_cors_origins, validate_cors_origins
+
 ROOT_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 
@@ -30,24 +32,12 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def parse_cors_origins(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [origin.strip() for origin in value.split(",") if origin.strip()]
-        return value
+        return parse_cors_origins(value)
 
     @field_validator("cors_origins")
     @classmethod
     def validate_cors_origins(cls, origins: list[str]) -> list[str]:
-        if not origins:
-            raise ValueError("CORS_ORIGINS must contain at least one exact origin")
-        if "*" in origins:
-            raise ValueError("Wildcard CORS origins are not allowed")
-        for origin in origins:
-            if origin == "null" or "://" not in origin:
-                raise ValueError(f"Invalid CORS origin: {origin}")
-            scheme, host = origin.split("://", maxsplit=1)
-            if scheme not in {"http", "https"} or not host or "/" in host:
-                raise ValueError(f"Invalid CORS origin: {origin}")
-        return origins
+        return validate_cors_origins(origins)
 
 
 @lru_cache
