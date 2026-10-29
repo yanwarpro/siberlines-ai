@@ -73,6 +73,20 @@ The Compose stack does not include the frontend container. Run Vite using the fr
 
 The health endpoint is `GET http://localhost:8000/api/v1/health`. It reports application liveness and does not claim that PostgreSQL is reachable.
 
+### CSV dataset upload
+
+`POST /api/v1/datasets/upload` accepts a multipart form with a `.csv` `file` and an optional `name`. It creates a dataset and posts in one database transaction. CSV headers must include `external_id` and `platform`; optional headers are `text`, `author`, and ISO 8601 `published_at`. Files are limited to 5 MiB and 10,000 rows. The upload is rejected as a whole if a row is invalid; no analysis or alerts are generated.
+
+Example from PowerShell after the API is running:
+
+```powershell
+curl.exe -X POST http://localhost:8000/api/v1/datasets/upload `
+  -F "file=@.\posts.csv;type=text/csv" `
+  -F "name=Authorized sample"
+```
+
+The CSV endpoint accepts uploads only from configured CORS origins when called by a browser. CORS is not authentication; do not expose this prototype API publicly for sensitive data without adding an appropriate access-control mechanism.
+
 ### 2. Run the frontend
 
 In another terminal, from the repository root:
