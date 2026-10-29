@@ -42,28 +42,43 @@ async def upload_dataset(
             raise HTTPException(status_code=413, detail="CSV file exceeds the 5 MiB limit")
 
         try:
-            posts = parse_posts_csv(content)
+            parsed_csv = parse_posts_csv(content)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-        dataset_name = (name or Path(file.filename).stem).strip()
+        dataset_name = (name or Path(file.filename).name).strip()
         if not dataset_name:
             raise HTTPException(status_code=400, detail="Dataset name cannot be empty")
+        if len(dataset_name) > 200:
+            raise HTTPException(
+                status_code=400,
+                detail="Dataset name cannot exceed 200 characters",
+            )
 
-        dataset = Dataset(name=dataset_name, source="csv_upload", status="uploaded")
+        dataset = Dataset(
+            name=dataset_name,
+            source_type="csv_upload",
+            row_count=len(parsed_csv.records),
+            status="uploaded",
+        )
         with db.begin():
             db.add(dataset)
             db.flush()
-            db.add_all(Post(dataset_id=dataset.id, **post_data) for post_data in posts)
+            db.add_all(
+                Post(dataset_id=dataset.id, **post_data)
+                for post_data in parsed_csv.records
+            )
             db.flush()
     finally:
         await file.close()
 
     return {
-        "dataset_id": dataset.id,
+        "dataset_id": str(dataset.id),
         "name": dataset.name,
+        "rows_received": parsed_csv.rows_received,
+        "rows_inserted": len(parsed_csv.records),
+        "duplicates_skipped": parsed_csv.duplicates_skipped,
         "status": dataset.status,
-        "post_count": len(posts),
     }
 
 

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
@@ -13,19 +14,19 @@ def test_list_datasets_returns_paginated_metadata_only(
     with test_session() as session:
         dataset = Dataset(
             name="Authorized collection",
-            source="csv_upload",
+            source_type="csv_upload",
             status="uploaded",
-            description="Must not be exposed in public summaries",
+            row_count=1,
         )
         session.add(dataset)
         session.flush()
         session.add(
             Post(
                 dataset_id=dataset.id,
-                external_id="record-1",
-                platform="example",
+                timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                source_id="example",
+                content_hash="hash-record-1",
                 text="Private uploaded text",
-                author="private-author",
             )
         )
         session.commit()
@@ -36,11 +37,10 @@ def test_list_datasets_returns_paginated_metadata_only(
     assert len(response.json()) == 1
     record = response.json()[0]
     assert record["name"] == "Authorized collection"
-    assert record["post_count"] == 1
+    assert record["row_count"] == 1
     assert "description" not in record
     assert "posts" not in record
     assert "Private uploaded text" not in response.text
-    assert "private-author" not in response.text
 
 
 def test_get_dataset_returns_metadata_and_post_count(
@@ -48,7 +48,12 @@ def test_get_dataset_returns_metadata_and_post_count(
 ) -> None:
     client, test_session = api_client
     with test_session() as session:
-        dataset = Dataset(name="Test dataset", source="csv_upload", status="uploaded")
+        dataset = Dataset(
+            name="Test dataset",
+            source_type="csv_upload",
+            status="uploaded",
+            row_count=2,
+        )
         session.add(dataset)
         session.flush()
         dataset_id = dataset.id
@@ -57,9 +62,10 @@ def test_get_dataset_returns_metadata_and_post_count(
                 Post(
                     dataset_id=dataset_id,
                     external_id=f"record-{index}",
-                    platform="example",
-                    published_at=datetime(2026, 1, index, tzinfo=timezone.utc),
+                    source_id="example",
+                    timestamp=datetime(2026, 1, index, tzinfo=timezone.utc),
                     text="Not included in metadata endpoint",
+                    content_hash=f"hash-record-{index}",
                 )
                 for index in (1, 2)
             ]
@@ -69,8 +75,8 @@ def test_get_dataset_returns_metadata_and_post_count(
     response = client.get(f"/api/v1/datasets/{dataset_id}")
 
     assert response.status_code == 200
-    assert response.json()["id"] == dataset_id
-    assert response.json()["post_count"] == 2
+    assert response.json()["id"] == str(dataset_id)
+    assert response.json()["row_count"] == 2
     assert "posts" not in response.json()
     assert "Not included in metadata endpoint" not in response.text
 
@@ -80,7 +86,7 @@ def test_get_dataset_returns_404_for_missing_dataset(
 ) -> None:
     client, _ = api_client
 
-    response = client.get("/api/v1/datasets/999")
+    response = client.get(f"/api/v1/datasets/{uuid4()}")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Dataset not found"}

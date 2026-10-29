@@ -3,23 +3,19 @@ import csv
 from pathlib import Path
 
 DEFAULT_OUTPUT = Path(__file__).resolve().parents[1] / "data" / "samples" / "synthetic_posts.csv"
-FIELDS = ("synthetic", "external_id", "platform", "author", "text", "published_at")
+FIELDS = ("timestamp", "text", "source_id", "external_id")
 ROWS = (
     {
-        "synthetic": "true",
-        "external_id": "synthetic-001",
-        "platform": "fictional",
-        "author": "sample-user-a",
+        "timestamp": "2026-01-01T10:00:00Z",
         "text": "Fictional example post for testing CSV handling.",
-        "published_at": "2026-01-01T10:00:00Z",
+        "source_id": "fictional",
+        "external_id": "synthetic-001",
     },
     {
-        "synthetic": "true",
-        "external_id": "synthetic-002",
-        "platform": "fictional",
-        "author": "sample-user-b",
+        "timestamp": "2026-01-01T10:05:00Z",
         "text": "Synthetic content only; not a real report or threat signal.",
-        "published_at": "2026-01-01T10:05:00Z",
+        "source_id": "fictional",
+        "external_id": "synthetic-002",
     },
 )
 

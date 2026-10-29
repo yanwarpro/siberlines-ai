@@ -1,10 +1,12 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Dataset, Post
+from app.models import Dataset
 from app.schemas.dataset import DatasetSummary
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -15,14 +17,11 @@ def _dataset_summary_statement():
         select(
             Dataset.id,
             Dataset.name,
-            Dataset.source,
+            Dataset.source_type,
             Dataset.status,
             Dataset.created_at,
-            Dataset.updated_at,
-            func.count(Post.id).label("post_count"),
+            Dataset.row_count,
         )
-        .outerjoin(Post, Post.dataset_id == Dataset.id)
-        .group_by(Dataset.id)
     )
 
 
@@ -48,7 +47,7 @@ def list_datasets(
 
 
 @router.get("/{dataset_id}", response_model=DatasetSummary)
-def get_dataset(dataset_id: int, db: Session = Depends(get_db)) -> DatasetSummary:
+def get_dataset(dataset_id: UUID, db: Session = Depends(get_db)) -> DatasetSummary:
     try:
         row = db.execute(
             _dataset_summary_statement().where(Dataset.id == dataset_id)

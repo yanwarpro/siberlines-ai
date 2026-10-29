@@ -1,25 +1,24 @@
 from datetime import datetime
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 
 class DatasetRead(BaseModel):
-    id: int
+    id: UUID
     name: str
-    source: str
+    source_type: str
     status: str
-    description: str | None
+    row_count: int
     created_at: datetime
-    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
 class DatasetSummary(BaseModel):
-    id: int
+    id: UUID
     name: str
-    source: str
+    source_type: str
     status: str
     created_at: datetime
-    updated_at: datetime
-    post_count: int
+    row_count: int

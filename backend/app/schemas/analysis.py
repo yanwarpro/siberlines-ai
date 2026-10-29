@@ -1,16 +1,17 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 
 class AnalysisRead(BaseModel):
-    id: int
-    dataset_id: int | None
-    post_id: int | None
-    analysis_type: str
+    id: UUID
+    dataset_id: UUID
     status: str
-    result: dict[str, Any] | None
+    config_json: dict[str, Any]
+    metrics_json: dict[str, Any]
     created_at: datetime
+    completed_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
