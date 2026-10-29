@@ -111,10 +111,13 @@ Apply migrations with `alembic upgrade head` from `backend/`. To roll the schema
 
 ### Frontend
 
-1. Deploy `frontend/` to a static hosting provider such as Vercel or Netlify, using its Vite build preset.
-2. Set the build command to `npm run build`, and the output directory to `dist`.
-3. Set `VITE_API_BASE_URL` at build time to `https://<your-api-host>/api/v1`.
-4. Add the deployed frontend's exact origin to the backend's `CORS_ORIGINS`, then redeploy/restart the backend.
+For Netlify, connect the repository root; the checked-in [`netlify.toml`](./netlify.toml) sets the monorepo base to `frontend/`, build command to `npm run build`, publish directory to `dist`, and Node.js version to 20. If entering settings manually in the Netlify UI, use those same values.
+
+1. Configure `VITE_API_BASE_URL` in Netlify's site environment variables as `https://<your-api-host>/api/v1`. This is a public API URL, not a database URL or secret. Trigger a new deploy after setting or changing it.
+2. Add the Netlify site's exact origin (for example, `https://<site-name>.netlify.app`) to the backend's `CORS_ORIGINS`, then redeploy/restart the backend. Do not include a path or trailing slash.
+3. Check the Netlify deploy log for a successful Vite build and confirm the publish directory is `frontend/dist` (or `dist` relative to the configured `frontend` base).
+
+For other static providers, set the build command to `npm run build` with `frontend/` as the working directory and `dist` as the publish directory.
 
 Never put database credentials or other server secrets in frontend variables; Vite exposes `VITE_` variables to browser code. Use TLS and the hosting provider's secret manager for production settings.
 
