@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   Activity,
   Bell,
@@ -13,10 +13,11 @@ import {
 } from "lucide-react";
 import { getHealth } from "./api/client";
 import AlertsPage from "./pages/AlertsPage";
-import AnalysisPage from "./pages/AnalysisPage";
 import Dashboard from "./pages/Dashboard";
 import DatasetPage from "./pages/DatasetPage";
 import type { PageName } from "./types";
+
+const AnalysisPage = lazy(() => import("./pages/AnalysisPage"));
 
 const navigation: { label: string; page: PageName; icon: typeof LayoutDashboard }[] = [
   { label: "Overview", page: "overview", icon: LayoutDashboard },
@@ -202,7 +203,15 @@ function App() {
           </div>
         </header>
 
-        {renderPage()}
+        <Suspense
+          fallback={
+            <div className="mx-auto flex min-h-64 max-w-[1440px] items-center justify-center text-sm text-slate-400">
+              Loading workspace…
+            </div>
+          }
+        >
+          {renderPage()}
+        </Suspense>
 
         <footer className="mx-auto flex max-w-[1440px] flex-col justify-between gap-2 border-t border-white/[0.06] px-5 py-5 text-[10px] text-slate-600 sm:flex-row sm:px-8">
           <span>SIBERLENS AI · Defensive social cyber intelligence</span>

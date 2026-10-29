@@ -1,6 +1,6 @@
 # SIBERLENS AI
 
-SIBERLENS AI is a defensive social cyber intelligence early-warning prototype. This repository contains the initial runnable monorepo foundation: a React dashboard shell and a FastAPI service backed by PostgreSQL. It does not collect social data or perform clustering, anomaly detection, LLM analysis, authentication, or analytics.
+SIBERLENS AI is a defensive social cyber intelligence early-warning prototype. This monorepo contains a React dashboard and a FastAPI service backed by PostgreSQL. It accepts authorized CSV uploads and runs deterministic TF-IDF similarity and hourly-volume analysis. It does not collect social data, call an LLM, or provide authentication.
 
 ## Repository layout
 
@@ -75,7 +75,7 @@ The health endpoint is `GET http://localhost:8000/api/v1/health`. It reports app
 
 ### CSV dataset upload
 
-`POST /api/v1/datasets/upload` accepts a multipart form with a `.csv` `file` and an optional `name`. It creates a UUID dataset and stores post rows in one database transaction. CSV headers must include `timestamp` and `text`; `source_id` and `external_id` are optional. Timestamp values must be ISO 8601. Header matching is case-insensitive and accepts common aliases (`published_at` for timestamp, `content` for text, and `source`/`platform` for source_id). Optional `dataset_label` and `expected_topic` evaluation columns are accepted but ignored. Files are limited to 5 MiB and 10,000 rows. Repeated text is preserved as separate posts; duplicate rows are skipped only when both `source_id` and `external_id` match. The upload is rejected as a whole if a row is invalid; no analysis or alerts are generated.
+`POST /api/v1/datasets/upload` accepts a multipart form with a `.csv` `file` and an optional `name`. It creates a UUID dataset and stores post rows in one database transaction. CSV headers must include `timestamp` and `text`; `source_id` and `external_id` are optional. Timestamp values must be ISO 8601. Header matching is case-insensitive and accepts common aliases (`published_at` for timestamp, `content` for text, and `source`/`platform` for source_id). Optional `dataset_label` and `expected_topic` evaluation columns are accepted but ignored. Files are limited to 5 MiB and 10,000 rows. Repeated text is preserved as separate posts; duplicate rows are skipped only when both `source_id` and `external_id` match. The upload is rejected as a whole if a row is invalid; uploading does not automatically run analysis or create alerts.
 
 Example from PowerShell after the API is running:
 
@@ -94,6 +94,16 @@ The CSV endpoint accepts uploads only from configured CORS origins when called b
 - `GET /api/v1/datasets/{dataset_id}` returns the same metadata for one UUID dataset, or HTTP 404 when it does not exist.
 
 Dataset read responses deliberately omit descriptions, post text, authors, and raw uploaded rows because these routes do not require authentication. Do not treat this metadata-only design or CORS as access control; add authentication and authorization before using the public API for confidential datasets.
+
+### Persisted dataset analysis
+
+- `POST /api/v1/datasets/{dataset_id}/analyses` calculates and saves a completed run using the selected dataset's stored posts.
+- `GET /api/v1/datasets/{dataset_id}/analyses` returns up to 50 saved runs for reopening in the UI.
+- `GET /api/v1/analyses/{analysis_id}` returns one saved run and its alert evidence.
+
+Narrative candidates use token-based TF-IDF cosine similarity (threshold `0.24`) and connected components; the displayed sample texts and source/timestamp evidence come from the stored posts. Similarity is bounded to 2,500 posts and 1,000,000 candidate pairs; if those limits are exceeded, the run records a warning and omits similarity groups rather than returning a partial result. Hourly spikes require at least 24 prior hourly bins and 20 baseline posts; a candidate must also exceed the historical mean by three standard deviations and the relative-volume threshold. The backend persists a volume alert only when those checks pass. These heuristics are review signals, not proof of coordination, misinformation, or intent. Evaluation columns such as `dataset_label` and `expected_topic` are not stored or used as model inputs.
+
+Analysis responses include representative raw post text as evidence. The prototype API has no authentication or per-user authorization; do not upload confidential or personally sensitive posts to a publicly reachable deployment.
 
 ### 2. Run the frontend
 
@@ -114,9 +124,9 @@ The backend reads `DATABASE_URL` and `CORS_ORIGINS` from the process environment
 The initial Alembic revision creates:
 
 - `datasets`: UUID source/import metadata, stored row count, and lifecycle status.
-- `posts`: UUID dataset-linked records with timestamps, source IDs, text, and a unique content hash per dataset.
-- `analyses`: optional dataset-linked analysis metadata and JSON configuration/metrics. No analysis is generated by this prototype.
-- `alerts`: optional analysis-linked alert metadata and JSON evidence. No alerts are generated by this prototype.
+- `posts`: UUID dataset-linked records with timestamps, source IDs, text, and content hashes; the latest migration preserves repeated text and deduplicates only matching source/external IDs.
+- `analyses`: dataset-linked run status, JSON configuration/metrics, and completion timestamps.
+- `alerts`: analysis-linked volume signals with baseline counts and JSON evidence.
 
 For a new database, apply migrations with `alembic upgrade head` from `backend/`. The migrations enable row-level security but do not add policies; use a trusted backend database role with the required table privileges, and do not expose database credentials to the frontend.
 

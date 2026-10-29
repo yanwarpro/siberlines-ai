@@ -4,6 +4,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas.alert import AlertRead
+
 
 class AnalysisRead(BaseModel):
     id: UUID
@@ -15,3 +17,7 @@ class AnalysisRead(BaseModel):
     completed_at: datetime | None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AnalysisDetail(AnalysisRead):
+    alerts: list[AlertRead]
