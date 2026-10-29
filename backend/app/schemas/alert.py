@@ -1,18 +1,20 @@
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
 
 class AlertRead(BaseModel):
-    id: int
-    dataset_id: int | None
-    post_id: int | None
-    title: str
-    description: str | None
+    id: UUID
+    analysis_id: UUID
+    narrative_key: str
     severity: str
+    baseline_count: int
+    observed_count: int
+    evidence_json: list[Any]
+    explanation: str | None
     status: str
-    details: dict[str, Any] | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

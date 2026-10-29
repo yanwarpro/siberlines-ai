@@ -15,42 +15,83 @@ def test_upload_csv_creates_dataset_and_posts(
         files={
             "file": (
                 "observations.csv",
-                "external_id,platform,text,author,published_at\n"
-                "post-1,example,Sample post,analyst,2026-10-29T10:00:00Z\n",
+                "timestamp,text,source_id,external_id\n"
+                "2026-10-29T10:00:00Z,Sample post,example,post-1\n",
                 "text/csv",
             )
         },
     )
 
     assert response.status_code == 201
-    assert response.json()["name"] == "observations"
+    assert response.json()["name"] == "observations.csv"
+    assert response.json()["rows_received"] == 1
+    assert response.json()["rows_inserted"] == 1
+    assert response.json()["duplicates_skipped"] == 0
     assert response.json()["status"] == "uploaded"
-    assert response.json()["post_count"] == 1
 
     with test_session() as session:
         dataset = session.scalar(select(Dataset))
         post = session.scalar(select(Post))
         assert dataset is not None
+        assert dataset.row_count == 1
+        assert dataset.source_type == "csv_upload"
         assert post is not None
         assert post.dataset_id == dataset.id
         assert post.external_id == "post-1"
-        assert post.published_at is not None
+        assert post.timestamp is not None
+        assert len(post.content_hash) == 64
+
+
+def test_upload_counts_and_skips_duplicate_content(
+    api_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    test_client, test_session = api_client
+    response = test_client.post(
+        "/api/v1/datasets/upload",
+        files={
+            "file": (
+                "duplicates.csv",
+                "timestamp,text,source_id\n"
+                "2026-10-29T10:00:00Z,Repeated text,source-a\n"
+                "2026-10-29T10:05:00Z,Repeated   text,source-b\n"
+                "2026-10-29T10:10:00Z,Different text,source-a\n",
+                "text/csv",
+            )
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["rows_received"] == 3
+    assert response.json()["rows_inserted"] == 2
+    assert response.json()["duplicates_skipped"] == 1
+
+    with test_session() as session:
+        dataset = session.scalar(select(Dataset))
+        posts = session.scalars(select(Post)).all()
+        assert dataset is not None
+        assert dataset.row_count == 2
+        assert len(posts) == 2
 
 
 @pytest.mark.parametrize(
     ("filename", "content", "message"),
     [
-        ("observations.txt", b"external_id,platform\npost-1,example\n", "Upload a .csv file"),
-        ("observations.csv", b"external_id\npost-1\n", "missing required columns"),
+        ("observations.txt", b"timestamp,text\n2026-01-01T00:00:00Z,post\n", "Upload a .csv file"),
+        ("observations.csv", b"timestamp,source_id\n2026-01-01T00:00:00Z,source\n", "missing required columns"),
         (
             "observations.csv",
-            b"external_id,platform\npost-1,example\npost-1,example\n",
-            "duplicate external_id",
+            b"timestamp,text,unknown\n2026-01-01T00:00:00Z,post,x\n",
+            "unsupported columns",
         ),
         (
             "observations.csv",
-            b"external_id,platform,published_at\npost-1,example,not-a-date\n",
+            b"timestamp,text\nnot-a-date,post\n",
             "ISO 8601",
+        ),
+        (
+            "observations.csv",
+            b"timestamp,text\n2026-01-01T00:00:00Z,\n",
+            "missing text",
         ),
     ],
 )
