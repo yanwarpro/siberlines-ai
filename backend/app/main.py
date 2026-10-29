@@ -5,18 +5,14 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, sta
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from app.api.datasets import router as datasets_router
 from app.api.health import router as health_router
 from app.core.config import get_settings
-from app.db.session import SessionLocal
+from app.db.session import get_db
 from app.models import Dataset, Post
 from app.services.csv_service import parse_posts_csv
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-
-
-def get_db() -> Generator[Session, None, None]:
-    with SessionLocal() as session:
-        yield session
 
 settings = get_settings()
 
@@ -69,3 +65,6 @@ async def upload_dataset(
         "status": dataset.status,
         "post_count": len(posts),
     }
+
+
+app.include_router(datasets_router, prefix="/api/v1")

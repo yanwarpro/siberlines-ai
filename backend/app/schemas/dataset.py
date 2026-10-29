@@ -13,3 +13,13 @@ class DatasetRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DatasetSummary(BaseModel):
+    id: int
+    name: str
+    source: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    post_count: int
