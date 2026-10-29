@@ -31,11 +31,12 @@ export interface EvidenceRecord {
 }
 
 export interface DatasetRecord {
-  id: number;
+  id: string;
   name: string;
-  source: string;
+  source_type: string;
+  row_count: number;
   status: string;
-  createdAt: string;
+  created_at: string;
 }
 
 export interface AnalysisRecord {
