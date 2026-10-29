@@ -113,7 +113,7 @@ Apply migrations with `alembic upgrade head` from `backend/`. To roll the schema
 
 For Netlify, connect the repository root; the checked-in [`netlify.toml`](./netlify.toml) sets the monorepo base to `frontend/`, build command to `npm run build`, publish directory to `dist`, and Node.js version to 20. If entering settings manually in the Netlify UI, use those same values.
 
-1. Configure `VITE_API_BASE_URL` in Netlify's site environment variables as `https://<your-api-host>/api/v1`. This is a public API URL, not a database URL or secret. Trigger a new deploy after setting or changing it.
+1. Configure only frontend variables in Netlify. Set `VITE_API_BASE_URL` to `https://<your-api-host>/api/v1`; this is a public API URL, not a database URL or secret. Remove backend-only variables such as `DATABASE_URL`, `DATABASE_URL_DOCKER`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `CORS_ORIGINS` from the Netlify site/build environment. They belong only in the backend deployment. Trigger a new deploy after changing environment variables.
 2. Add the Netlify site's exact origin (for example, `https://<site-name>.netlify.app`) to the backend's `CORS_ORIGINS`, then redeploy/restart the backend. Do not include a path or trailing slash.
 3. Check the Netlify deploy log for a successful Vite build and confirm the publish directory is `frontend/dist` (or `dist` relative to the configured `frontend` base).
 
