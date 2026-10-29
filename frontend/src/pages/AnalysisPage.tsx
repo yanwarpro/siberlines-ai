@@ -218,14 +218,18 @@ export default function AnalysisPage() {
   const selectedSignal = result?.alerts.find((alert) => alert.id === selectedSignalId);
   const volumeReview = getVolumeReview(metrics, selectedSignal);
   const relatedNarratives =
-    selectedSignal && volumeReview && metrics
-      ? metrics.narratives.filter((group) => {
-          const groupStart = new Date(group.start_time).getTime();
-          const groupEnd = new Date(group.end_time).getTime();
-          const signalStart = new Date(volumeReview.interval_start).getTime();
-          const signalEnd = new Date(volumeReview.interval_end).getTime();
-          return groupStart < signalEnd && groupEnd >= signalStart;
-        })
+    selectedSignal && metrics
+      ? metrics.narratives
+          .map((group) => {
+            const alertEvidenceIds = new Set(
+              selectedSignal.evidence_json.map((evidence) => evidence.post_id),
+            );
+            const sharedEvidenceCount = group.evidence.filter((evidence) =>
+              alertEvidenceIds.has(evidence.post_id),
+            ).length;
+            return { group, sharedEvidenceCount };
+          })
+          .filter(({ sharedEvidenceCount }) => sharedEvidenceCount > 0)
       : [];
 
   return (
@@ -606,22 +610,26 @@ export default function AnalysisPage() {
                             <p className="mt-1 text-[10px] leading-5 text-slate-500">
                               {volumeReview.observed_to_baseline_ratio.toFixed(2)}× the prior hourly mean ·
                               {" "}{volumeReview.standard_score.toFixed(2)} standard-score units from baseline.
-                              The threshold requires exceeding the mean by 3 standard deviations and
+                              The threshold is the maximum of 5 posts, the baseline mean plus 3 standard
+                              deviations, and 2.5× the baseline mean; the count must reach
                               {" "}{volumeReview.required_count.toFixed(2)} posts.
                             </p>
                           )}
                         </div>
                         <div>
-                          <h4 className="text-xs font-semibold text-slate-200">Related text patterns</h4>
+                          <h4 className="text-xs font-semibold text-slate-200">
+                            Text groups sharing evidence samples
+                          </h4>
                           {relatedNarratives.length > 0 ? (
                             <>
                               <ul className="mt-2 space-y-2">
-                                {relatedNarratives.map((group) => (
+                                {relatedNarratives.map(({ group, sharedEvidenceCount }) => (
                                   <li key={group.id} className="rounded-lg border border-white/[0.06] p-3">
                                     <div className="flex flex-wrap items-center justify-between gap-2">
                                       <span className="text-xs text-slate-200">{group.label}</span>
                                       <span className="text-[10px] text-slate-500">
                                         {group.post_count} posts · similarity {group.mean_similarity.toFixed(2)}
+                                        {" · "}{sharedEvidenceCount} shared samples
                                       </span>
                                     </div>
                                     <p className="mt-1 text-xs leading-5 text-slate-400">
@@ -631,12 +639,12 @@ export default function AnalysisPage() {
                                 ))}
                               </ul>
                               <p className="mt-2 text-[10px] leading-5 text-slate-600">
-                                These patterns have a time range overlapping this review window; overlap does not establish a causal or coordinated relationship.
+                                Shared samples indicate evidence overlap only; this does not establish a causal or coordinated relationship.
                               </p>
                             </>
                           ) : (
                             <p className="mt-1 text-xs leading-5 text-slate-500">
-                              No similar-text group has evidence in this interval.
+                              No similar-text group shares sampled posts with this signal. This does not rule out other patterns in the dataset.
                             </p>
                           )}
                         </div>
