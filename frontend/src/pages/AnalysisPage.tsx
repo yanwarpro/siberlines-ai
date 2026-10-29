@@ -231,6 +231,10 @@ export default function AnalysisPage() {
           })
           .filter(({ sharedEvidenceCount }) => sharedEvidenceCount > 0)
       : [];
+  const largestGroupSize = Math.max(
+    1,
+    ...((metrics?.narratives ?? []).map((group) => group.post_count)),
+  );
 
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 sm:py-10">
@@ -455,36 +459,84 @@ export default function AnalysisPage() {
                   <Activity size={18} className="mt-0.5 shrink-0 text-accent-400" />
                   <div>
                     <h2 className="text-sm font-semibold text-slate-200">Similar text groups</h2>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">
-                      Groups are based on token TF-IDF cosine similarity. They are candidate patterns for human review, not confirmed narratives.
+                    <p className="mt-1 text-xs text-slate-500">
+                      {metrics.narratives.length} patterns · up to {largestGroupSize} posts per group
                     </p>
                   </div>
                 </div>
                 {metrics.narratives.length === 0 ? (
                   <p className="mt-6 text-xs text-slate-500">No similar text groups met the configured threshold.</p>
                 ) : (
-                  <div className="mt-5 grid gap-4 xl:grid-cols-2">
-                    {metrics.narratives.map((group) => (
-                      <article key={group.id} className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <h3 className="text-xs font-semibold text-slate-200">
-                            {group.label} {group.id.replace("narrative-", "#")}
-                          </h3>
-                          <span className="rounded-full bg-accent-400/[0.08] px-2.5 py-1 text-[10px] text-accent-400">
-                            {group.post_count} posts · similarity {group.mean_similarity.toFixed(2)}
-                          </span>
+                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    {metrics.narratives.map((group, index) => (
+                      <article
+                        key={group.id}
+                        className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
+                              Pattern {String(index + 1).padStart(2, "0")}
+                            </p>
+                            <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-100">
+                              {group.post_count}
+                            </p>
+                            <p className="text-[10px] text-slate-500">posts</p>
+                          </div>
+                          <div className="rounded-lg border border-accent-400/15 bg-accent-400/[0.06] px-2.5 py-2 text-right">
+                            <p className="text-sm font-semibold tabular-nums text-accent-300">
+                              {Math.round(group.mean_similarity * 100)}%
+                            </p>
+                            <p className="text-[9px] uppercase tracking-wide text-slate-500">similarity</p>
+                          </div>
                         </div>
-                        <p className="mt-3 text-xs leading-5 text-slate-300">
-                          {group.representative_text}
+                        <div className="mt-4 space-y-3">
+                          <div>
+                            <div className="mb-1.5 flex justify-between text-[9px] text-slate-500">
+                              <span>Relative group size</span>
+                              <span>{Math.round((group.post_count / largestGroupSize) * 100)}%</span>
+                            </div>
+                            <div
+                              className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]"
+                              role="img"
+                              aria-label={`${group.post_count} posts in this similarity group`}
+                            >
+                              <div
+                                className="h-full rounded-full bg-accent-400"
+                                style={{
+                                  width: `${Math.max(3, (group.post_count / largestGroupSize) * 100)}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="mb-1.5 flex justify-between text-[9px] text-slate-500">
+                              <span>Similarity score</span>
+                              <span>{group.mean_similarity.toFixed(2)}</span>
+                            </div>
+                            <div
+                              className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]"
+                              role="img"
+                              aria-label={`Similarity score ${Math.round(group.mean_similarity * 100)} percent`}
+                            >
+                              <div
+                                className="h-full rounded-full bg-sky-400"
+                                style={{ width: `${Math.max(0, Math.min(100, group.mean_similarity * 100))}%` }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <p className="mt-3 text-[10px] text-slate-500">
+                          {formatDate(group.start_time)} – {formatDate(group.end_time)}
                         </p>
-                        <p className="mt-2 text-[10px] text-slate-500">
-                          {formatDate(group.start_time)} — {formatDate(group.end_time)}
-                        </p>
-                        <details className="mt-4 border-t border-white/[0.06] pt-3">
-                          <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-200">
-                            Inspect sample evidence ({group.evidence.length})
+                        <details className="mt-3 border-t border-white/[0.06] pt-3">
+                          <summary className="cursor-pointer text-[10px] font-medium text-slate-400 hover:text-slate-200">
+                            View text &amp; {group.evidence.length} samples
                           </summary>
-                          <div className="mt-4">
+                          <p className="mt-3 text-xs leading-5 text-slate-300">
+                            {group.representative_text}
+                          </p>
+                          <div className="mt-3">
                             <EvidenceList evidence={group.evidence} />
                           </div>
                         </details>
@@ -499,8 +551,8 @@ export default function AnalysisPage() {
                   <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-400" />
                   <div>
                     <h2 className="text-sm font-semibold text-slate-200">Volume review signals</h2>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">
-                      A detected spike is a signal for analyst review, not evidence of coordination or disinformation.
+                    <p className="mt-1 text-xs text-slate-500">
+                      {result.alerts.length} detected · based on hourly volume
                     </p>
                   </div>
                 </div>
@@ -526,18 +578,72 @@ export default function AnalysisPage() {
                               : "border-amber-400/15 bg-amber-400/[0.035] hover:border-amber-400/30 hover:bg-amber-400/[0.06]"
                           }`}
                         >
-                          <span className="flex flex-wrap items-center gap-2">
-                            <span className="rounded-full border border-amber-400/20 px-2.5 py-1 text-[10px] font-semibold uppercase text-amber-300">
-                              {alert.severity}
+                          <span className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(240px,1.3fr)_auto] md:items-center">
+                            <span className="flex items-center gap-3">
+                              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-amber-400/20 bg-amber-400/[0.08] text-amber-300">
+                                <AlertTriangle size={17} />
+                              </span>
+                              <span>
+                                <span className="flex items-center gap-2">
+                                  <span className="text-xs font-semibold text-slate-200">Volume spike</span>
+                                  <span className="rounded-full border border-amber-400/20 px-2 py-0.5 text-[9px] font-semibold uppercase text-amber-300">
+                                    {alert.severity}
+                                  </span>
+                                </span>
+                                <span className="mt-1 block text-[10px] text-slate-500">
+                                  {volumeReview
+                                    ? formatDate(volumeReview.interval_start)
+                                    : "Time unavailable"}
+                                </span>
+                              </span>
                             </span>
-                            <span className="text-xs font-medium text-slate-200">
-                              Hourly volume spike · {alert.observed_count} posts
+                            <span>
+                              <span className="mb-2 flex items-center justify-between text-[9px] text-slate-500">
+                                <span>Observed vs. threshold</span>
+                                <span>{alert.observed_count} observed · {volumeReview?.baseline_mean.toFixed(2) ?? alert.baseline_count} baseline</span>
+                              </span>
+                              <span
+                                className="relative block h-2 overflow-hidden rounded-full bg-white/[0.07]"
+                                role="img"
+                                aria-label={`${alert.observed_count} observed posts compared with threshold ${volumeReview?.required_count.toFixed(2) ?? "unavailable"} and baseline ${volumeReview?.baseline_mean.toFixed(2) ?? alert.baseline_count}`}
+                              >
+                                <span
+                                  className="absolute inset-y-0 left-0 rounded-full bg-amber-400"
+                                  style={{
+                                    width: `${Math.max(
+                                      2,
+                                      (alert.observed_count /
+                                        Math.max(alert.observed_count, volumeReview?.required_count ?? alert.observed_count)) *
+                                        100,
+                                    )}%`,
+                                  }}
+                                />
+                                <span
+                                  className="absolute -top-1 bottom-[-4px] w-0.5 bg-slate-100"
+                                  style={{
+                                    left: `${Math.min(
+                                      98,
+                                      ((volumeReview?.required_count ?? alert.observed_count) /
+                                        Math.max(alert.observed_count, volumeReview?.required_count ?? alert.observed_count)) *
+                                        100,
+                                    )}%`,
+                                  }}
+                                  aria-hidden="true"
+                                />
+                              </span>
+                              <span className="mt-1.5 flex justify-between text-[9px] text-slate-600">
+                                <span>0</span>
+                                <span>Threshold marker</span>
+                              </span>
                             </span>
-                            <span className="text-[10px] text-slate-500">
-                              baseline ≈ {alert.baseline_count} posts/hour
-                            </span>
-                            <span className="ml-auto text-[10px] font-medium text-amber-300">
-                              {selectedSignalId === alert.id ? "Hide details" : "View finding details"}
+                            <span className="flex items-center justify-between gap-3 md:block md:text-right">
+                              <span className="text-xl font-semibold tabular-nums text-amber-300">
+                                {alert.observed_count}
+                                <span className="ml-1 text-[10px] font-normal text-slate-500">posts</span>
+                              </span>
+                              <span className="block text-[10px] font-medium text-amber-300">
+                                {selectedSignalId === alert.id ? "Hide details ↑" : "View details →"}
+                              </span>
                             </span>
                           </span>
                         </button>
