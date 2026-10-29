@@ -1,44 +1,15 @@
-from collections.abc import Generator
-
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.db.base import Base
 from app.main import app, get_db
 from app.models import Dataset, Post
 
-
-@pytest.fixture
-def client() -> Generator[tuple[TestClient, sessionmaker[Session]], None, None]:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    test_session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
-
-    def override_get_db() -> Generator[Session, None, None]:
-        with test_session() as session:
-            yield session
-
-    app.dependency_overrides[get_db] = override_get_db
-    try:
-        with TestClient(app) as test_client:
-            yield test_client, test_session
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        Base.metadata.drop_all(engine)
-        engine.dispose()
-
-
 def test_upload_csv_creates_dataset_and_posts(
-    client: tuple[TestClient, sessionmaker[Session]],
+    api_client: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
-    test_client, test_session = client
+    test_client, test_session = api_client
     response = test_client.post(
         "/api/v1/datasets/upload",
         files={
@@ -84,12 +55,12 @@ def test_upload_csv_creates_dataset_and_posts(
     ],
 )
 def test_invalid_csv_is_rejected_without_creating_data(
-    client: tuple[TestClient, sessionmaker[Session]],
+    api_client: tuple[TestClient, sessionmaker[Session]],
     filename: str,
     content: bytes,
     message: str,
 ) -> None:
-    test_client, test_session = client
+    test_client, test_session = api_client
     response = test_client.post(
         "/api/v1/datasets/upload",
         files={"file": (filename, content, "text/csv")},

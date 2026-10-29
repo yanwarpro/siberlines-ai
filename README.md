@@ -87,6 +87,14 @@ curl.exe -X POST http://localhost:8000/api/v1/datasets/upload `
 
 The CSV endpoint accepts uploads only from configured CORS origins when called by a browser. CORS is not authentication; do not expose this prototype API publicly for sensitive data without adding an appropriate access-control mechanism.
 
+### Dataset read and database health endpoints
+
+- `GET /api/v1/health/db` executes a lightweight database query and returns HTTP 503 if the database is unavailable.
+- `GET /api/v1/datasets?limit=50&offset=0` lists dataset metadata and post counts; `limit` is capped at 100.
+- `GET /api/v1/datasets/{dataset_id}` returns the same metadata for one dataset, or HTTP 404 when it does not exist.
+
+Dataset read responses deliberately omit descriptions, post text, authors, and raw uploaded rows because these routes do not require authentication. Do not treat this metadata-only design or CORS as access control; add authentication and authorization before using the public API for confidential datasets.
+
 ### 2. Run the frontend
 
 In another terminal, from the repository root:

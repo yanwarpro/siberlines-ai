@@ -18,6 +18,7 @@ node_modules/
 frontend/dist/
 frontend/.vite/
 data/samples/*.csv
+!data/samples/template_posts.csv
 
 # Editors and OS
 .vscode/
