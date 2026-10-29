@@ -54,6 +54,11 @@ def test_analysis_runs_on_supplied_dataset_and_can_be_reloaded(
     assert metrics["summary"]["post_count"] == 78
     assert metrics["summary"]["alert_count"] == 1
     assert metrics["summary"]["baseline_sufficient"] is True
+    assert metrics["volume_review"]["interval_start"] == "2026-10-28T14:00:00+00:00"
+    assert metrics["volume_review"]["interval_end"] == "2026-10-28T15:00:00+00:00"
+    assert metrics["volume_review"]["observed_count"] == 25
+    assert metrics["volume_review"]["baseline_mean"] < 1
+    assert metrics["volume_review"]["baseline_hours"] >= 24
     assert len(metrics["trend"]) > 24
     assert max(point["count"] for point in metrics["trend"]) == 25
     assert any("Jembatan Kenanga" in group["representative_text"] for group in metrics["narratives"])
@@ -94,6 +99,7 @@ def test_short_dataset_does_not_create_spike_alert(
     assert result["alerts"] == []
     assert result["metrics_json"]["summary"]["alert_count"] == 0
     assert result["metrics_json"]["summary"]["baseline_sufficient"] is False
+    assert result["metrics_json"]["volume_review"] is None
     assert any("baseline" in warning for warning in result["metrics_json"]["warnings"])
 
 

@@ -22,7 +22,14 @@ import {
   getDatasetAnalyses,
   getDatasets,
 } from "../api/client";
-import type { AnalysisEvidence, AnalysisRecord, DatasetRecord } from "../types";
+import type {
+  AnalysisAlert,
+  AnalysisEvidence,
+  AnalysisMetrics,
+  AnalysisRecord,
+  DatasetRecord,
+  VolumeReviewMetrics,
+} from "../types";
 
 function formatDate(value: string): string {
   const date = new Date(value);
@@ -55,6 +62,52 @@ function EvidenceList({ evidence }: { evidence: AnalysisEvidence[] }) {
   );
 }
 
+function getVolumeReview(
+  metrics: AnalysisMetrics | undefined,
+  alert: AnalysisAlert | undefined,
+): VolumeReviewMetrics | null {
+  if (metrics?.volume_review) return metrics.volume_review;
+  const firstEvidence = alert?.evidence_json[0];
+  if (!metrics || !firstEvidence) return null;
+
+  const timestamp = new Date(firstEvidence.timestamp);
+  if (Number.isNaN(timestamp.getTime())) return null;
+  timestamp.setUTCMinutes(0, 0, 0);
+  const intervalStart = timestamp.getTime();
+  const baseline = metrics.trend.filter(
+    (point) => new Date(point.timestamp).getTime() < intervalStart,
+  );
+  if (baseline.length === 0) return null;
+
+  const baselinePostCount = baseline.reduce((total, point) => total + point.count, 0);
+  const baselineMean = baselinePostCount / baseline.length;
+  const variance =
+    baseline.reduce((total, point) => total + (point.count - baselineMean) ** 2, 0) /
+    baseline.length;
+  const standardDeviation = Math.sqrt(variance);
+  const requiredCount = Math.max(
+    5,
+    baselineMean + 3 * standardDeviation,
+    baselineMean * 2.5,
+  );
+
+  return {
+    interval_start: timestamp.toISOString(),
+    interval_end: new Date(intervalStart + 60 * 60 * 1000).toISOString(),
+    baseline_hours: baseline.length,
+    baseline_post_count: baselinePostCount,
+    baseline_mean: baselineMean,
+    baseline_standard_deviation: standardDeviation,
+    required_count: requiredCount,
+    observed_count: alert.observed_count,
+    standard_score:
+      (alert.observed_count - baselineMean) / Math.max(standardDeviation, 1),
+    observed_to_baseline_ratio: baselineMean
+      ? alert.observed_count / baselineMean
+      : 0,
+  };
+}
+
 export default function AnalysisPage() {
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetId, setDatasetId] = useState("");
@@ -66,6 +119,7 @@ export default function AnalysisPage() {
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
 
   const loadDatasets = useCallback(async () => {
     setLoadingDatasets(true);
@@ -161,6 +215,18 @@ export default function AnalysisPage() {
 
   const metrics = result?.metrics_json;
   const selectedDataset = datasets.find((dataset) => dataset.id === datasetId);
+  const selectedSignal = result?.alerts.find((alert) => alert.id === selectedSignalId);
+  const volumeReview = getVolumeReview(metrics, selectedSignal);
+  const relatedNarratives =
+    selectedSignal && volumeReview && metrics
+      ? metrics.narratives.filter((group) => {
+          const groupStart = new Date(group.start_time).getTime();
+          const groupEnd = new Date(group.end_time).getTime();
+          const signalStart = new Date(volumeReview.interval_start).getTime();
+          const signalEnd = new Date(volumeReview.interval_end).getTime();
+          return groupStart < signalEnd && groupEnd >= signalStart;
+        })
+      : [];
 
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 sm:py-10">
@@ -439,34 +505,157 @@ export default function AnalysisPage() {
                     No volume alert was created. The dataset may not have a qualifying spike or enough historical baseline.
                   </p>
                 ) : (
-                  <div className="mt-5 space-y-5">
+                    <div className="mt-5 space-y-3">
                     {result.alerts.map((alert) => (
-                      <article key={alert.id} className="rounded-xl border border-amber-400/15 bg-amber-400/[0.035] p-4">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-amber-400/20 px-2.5 py-1 text-[10px] font-semibold uppercase text-amber-300">
-                            {alert.severity}
+                        <button
+                          key={alert.id}
+                          type="button"
+                          aria-expanded={selectedSignalId === alert.id}
+                          onClick={() =>
+                            setSelectedSignalId((current) =>
+                              current === alert.id ? null : alert.id,
+                            )
+                          }
+                          className={`w-full rounded-xl border p-4 text-left transition ${
+                            selectedSignalId === alert.id
+                              ? "border-amber-400/35 bg-amber-400/[0.08]"
+                              : "border-amber-400/15 bg-amber-400/[0.035] hover:border-amber-400/30 hover:bg-amber-400/[0.06]"
+                          }`}
+                        >
+                          <span className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full border border-amber-400/20 px-2.5 py-1 text-[10px] font-semibold uppercase text-amber-300">
+                              {alert.severity}
+                            </span>
+                            <span className="text-xs font-medium text-slate-200">
+                              Hourly volume spike · {alert.observed_count} posts
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              baseline ≈ {alert.baseline_count} posts/hour
+                            </span>
+                            <span className="ml-auto text-[10px] font-medium text-amber-300">
+                              {selectedSignalId === alert.id ? "Hide details" : "View finding details"}
+                            </span>
                           </span>
-                          <span className="text-xs font-medium text-slate-200">
-                            Hourly volume spike · {alert.observed_count} posts
-                          </span>
-                          <span className="text-[10px] text-slate-500">
-                            baseline ≈ {alert.baseline_count} posts/hour
-                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {selectedSignal && (
+                    <article
+                      className="mt-4 rounded-xl border border-amber-400/20 bg-navy-950/70 p-4 sm:p-6"
+                      aria-label="Review signal details"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-amber-300">
+                            Finding detail
+                          </p>
+                          <h3 className="mt-2 text-base font-semibold text-slate-100">
+                            Unusual hourly post volume
+                          </h3>
                         </div>
-                        <p className="mt-3 text-xs leading-5 text-slate-400">{alert.explanation}</p>
-                        <details className="mt-4 border-t border-white/[0.06] pt-3">
-                          <summary className="cursor-pointer text-xs text-slate-400 hover:text-slate-200">
-                            Inspect post evidence ({alert.evidence_json.length})
-                          </summary>
-                          <div className="mt-4">
-                            <EvidenceList evidence={alert.evidence_json} />
-                          </div>
-                        </details>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </section>
+                        <span className="rounded-full border border-amber-400/20 px-2.5 py-1 text-[10px] font-semibold uppercase text-amber-300">
+                          {selectedSignal.severity} review signal
+                        </span>
+                      </div>
+
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+                          <p className="text-[10px] text-slate-500">Detected window (UTC)</p>
+                          <p className="mt-1 text-xs font-medium text-slate-200">
+                            {volumeReview
+                              ? `${formatDate(volumeReview.interval_start)} – ${formatDate(volumeReview.interval_end)}`
+                              : selectedSignal.evidence_json[0]
+                                ? formatDate(selectedSignal.evidence_json[0].timestamp)
+                                : "Unavailable"}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+                          <p className="text-[10px] text-slate-500">Posts in window</p>
+                          <p className="mt-1 text-xs font-medium text-slate-200">
+                            {selectedSignal.observed_count.toLocaleString()} observed
+                            {volumeReview && ` / ${volumeReview.required_count.toFixed(2)} threshold`}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+                          <p className="text-[10px] text-slate-500">Historical baseline</p>
+                          <p className="mt-1 text-xs font-medium text-slate-200">
+                            {volumeReview
+                              ? `${volumeReview.baseline_mean.toFixed(2)} posts/hour`
+                              : `About ${selectedSignal.baseline_count} posts/hour`}
+                          </p>
+                        </div>
+                        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+                          <p className="text-[10px] text-slate-500">Baseline coverage</p>
+                          <p className="mt-1 text-xs font-medium text-slate-200">
+                            {volumeReview
+                              ? `${volumeReview.baseline_hours} hours · ${volumeReview.baseline_post_count} posts`
+                              : `${metrics?.summary.baseline_sufficient ? "Sufficient" : "Unavailable"} for review`}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="mt-5 space-y-3">
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-200">Why it was flagged</h4>
+                          <p className="mt-1 text-xs leading-5 text-slate-400">
+                            {selectedSignal.explanation ??
+                              "The observed count exceeded the backend's historical hourly-volume thresholds."}
+                          </p>
+                          {volumeReview && (
+                            <p className="mt-1 text-[10px] leading-5 text-slate-500">
+                              {volumeReview.observed_to_baseline_ratio.toFixed(2)}× the prior hourly mean ·
+                              {" "}{volumeReview.standard_score.toFixed(2)} standard-score units from baseline.
+                              The threshold requires exceeding the mean by 3 standard deviations and
+                              {" "}{volumeReview.required_count.toFixed(2)} posts.
+                            </p>
+                          )}
+                        </div>
+                        <div>
+                          <h4 className="text-xs font-semibold text-slate-200">Related text patterns</h4>
+                          {relatedNarratives.length > 0 ? (
+                            <>
+                              <ul className="mt-2 space-y-2">
+                                {relatedNarratives.map((group) => (
+                                  <li key={group.id} className="rounded-lg border border-white/[0.06] p-3">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="text-xs text-slate-200">{group.label}</span>
+                                      <span className="text-[10px] text-slate-500">
+                                        {group.post_count} posts · similarity {group.mean_similarity.toFixed(2)}
+                                      </span>
+                                    </div>
+                                    <p className="mt-1 text-xs leading-5 text-slate-400">
+                                      {group.representative_text}
+                                    </p>
+                                  </li>
+                                ))}
+                              </ul>
+                              <p className="mt-2 text-[10px] leading-5 text-slate-600">
+                                These patterns have a time range overlapping this review window; overlap does not establish a causal or coordinated relationship.
+                              </p>
+                            </>
+                          ) : (
+                            <p className="mt-1 text-xs leading-5 text-slate-500">
+                              No similar-text group has evidence in this interval.
+                            </p>
+                          )}
+                        </div>
+                        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+                          <h4 className="text-xs font-semibold text-slate-200">
+                            Evidence posts ({selectedSignal.evidence_json.length} shown)
+                          </h4>
+                          <p className="mb-3 mt-1 text-[10px] leading-5 text-slate-500">
+                            Samples are stored post text with original timestamps and source IDs.
+                          </p>
+                          <EvidenceList evidence={selectedSignal.evidence_json} />
+                        </div>
+                        <p className="border-t border-white/[0.06] pt-3 text-[10px] leading-5 text-slate-500">
+                          Limitations: this is a deterministic hourly-volume heuristic over the available historical window. Similarity and volume signals can be affected by sparse or incomplete data; they are prompts for human review, not proof of coordination, misinformation, or intent.
+                        </p>
+                      </div>
+                    </article>
+                  )}
+                </section>
 
               <p className="text-[10px] leading-5 text-slate-600">
                 Run {result.id} · Completed {result.completed_at ? formatDate(result.completed_at) : "time unavailable"}.

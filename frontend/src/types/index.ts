@@ -93,6 +93,20 @@ export interface AnalysisMetrics {
   };
   trend: SignalActivityPoint[];
   narratives: AnalysisNarrative[];
+  volume_review: VolumeReviewMetrics | null;
   warnings: string[];
   methodology: string;
+}
+
+export interface VolumeReviewMetrics {
+  interval_start: string;
+  interval_end: string;
+  baseline_hours: number;
+  baseline_post_count: number;
+  baseline_mean: number;
+  baseline_standard_deviation: number;
+  required_count: number;
+  observed_count: number;
+  standard_score: number;
+  observed_to_baseline_ratio: number;
 }
