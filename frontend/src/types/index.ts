@@ -15,12 +15,86 @@ export interface SignalActivityPoint {
   count: number;
 }
 
+export type AlertStatus =
+  | "new"
+  | "pending_review"
+  | "under_review"
+  | "resolved"
+  | "dismissed";
+
+export interface AlertStatusEvent {
+  event_id: string;
+  from_status: string;
+  to_status: string;
+  note: string | null;
+  recorded_at: string;
+  actor: string;
+}
+
+export interface AlertNoteEntry {
+  note_id: string;
+  body: string;
+  created_at: string;
+  actor: string;
+}
+
 export interface AlertRecord {
-  id: number;
-  title: string;
+  id: string;
+  analysis_id: string;
+  dataset_id: string | null;
+  narrative_key: string;
+  narrative_cluster_id: string | null;
+  episode_id: string | null;
   severity: string;
+  baseline_count: number;
+  observed_count: number;
+  evidence_json: AnalysisEvidence[];
+  explanation: string | null;
   status: string;
-  createdAt: string;
+  detection_interval_start: string | null;
+  detection_interval_end: string | null;
+  detected_at: string | null;
+  fingerprint: string | null;
+  status_history_json: AlertStatusEvent[];
+  analyst_notes_json: AlertNoteEntry[];
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface AlertListItem extends AlertRecord {
+  dataset_name: string | null;
+  analysis_created_at: string | null;
+}
+
+export type AlertDetail = AlertListItem;
+
+export interface AlertSummary {
+  total: number;
+  new: number;
+  pending_review: number;
+  under_review: number;
+  resolved: number;
+  dismissed: number;
+  high_priority: number;
+  medium_priority: number;
+  open_total: number;
+}
+
+export interface AlertListPage {
+  items: AlertListItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface AlertListQuery {
+  severity?: string;
+  status?: string;
+  datasetId?: string;
+  detectedFrom?: string;
+  detectedTo?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface EvidenceRecord {

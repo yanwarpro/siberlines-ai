@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -123,7 +123,12 @@ function getVolumeReview(
   };
 }
 
-export default function AnalysisPage() {
+interface AnalysisPageProps {
+  focusAnalysisId?: string | null;
+  onFocusConsumed?: () => void;
+}
+
+export default function AnalysisPage({ focusAnalysisId, onFocusConsumed }: AnalysisPageProps) {
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetId, setDatasetId] = useState("");
   const [temporalGapHours, setTemporalGapHours] = useState(6);
@@ -136,6 +141,12 @@ export default function AnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const pendingFocusRef = useRef<{ id: string; record: AnalysisRecord | null } | null>(null);
+  const datasetIdRef = useRef(datasetId);
+
+  useEffect(() => {
+    datasetIdRef.current = datasetId;
+  }, [datasetId]);
 
   const loadDatasets = useCallback(async () => {
     setLoadingDatasets(true);
@@ -160,6 +171,45 @@ export default function AnalysisPage() {
   }, [loadDatasets]);
 
   useEffect(() => {
+    if (!focusAnalysisId) return;
+    let active = true;
+    setError(null);
+    setLoadingHistory(true);
+    getAnalysis(focusAnalysisId)
+      .then((record) => {
+        if (!active) return;
+        pendingFocusRef.current = { id: focusAnalysisId, record };
+        if (record.dataset_id && record.dataset_id !== datasetIdRef.current) {
+          setDatasetId(record.dataset_id);
+          return;
+        }
+        setAnalyses((current) => [
+          record,
+          ...current.filter((item) => item.id !== record.id),
+        ]);
+        setAnalysisId(record.id);
+        setResult(record);
+        setLoadingHistory(false);
+        pendingFocusRef.current = null;
+        onFocusConsumed?.();
+      })
+      .catch((loadError: unknown) => {
+        if (!active) return;
+        setLoadingHistory(false);
+        pendingFocusRef.current = null;
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Could not open the analysis linked to this alert.",
+        );
+        onFocusConsumed?.();
+      });
+    return () => {
+      active = false;
+    };
+  }, [focusAnalysisId, onFocusConsumed]);
+
+  useEffect(() => {
     if (!datasetId) {
       setAnalyses([]);
       setAnalysisId("");
@@ -176,6 +226,17 @@ export default function AnalysisPage() {
     getDatasetAnalyses(datasetId)
       .then((records) => {
         if (!active) return;
+        const pending = pendingFocusRef.current;
+        if (pending && records.some((record) => record.id === pending.id)) {
+          setAnalyses(records);
+          setAnalysisId(pending.id);
+          setResult(pending.record);
+          setLoadingHistory(false);
+          pendingFocusRef.current = null;
+          onFocusConsumed?.();
+          return;
+        }
+        pendingFocusRef.current = null;
         setAnalyses(records);
         if (records[0]) {
           setAnalysisId(records[0].id);
@@ -196,7 +257,7 @@ export default function AnalysisPage() {
     return () => {
       active = false;
     };
-  }, [datasetId]);
+  }, [datasetId, onFocusConsumed]);
 
   async function openSavedAnalysis(id: string) {
     setAnalysisId(id);

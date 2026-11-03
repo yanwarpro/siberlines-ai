@@ -705,6 +705,32 @@ def analyze_posts(
             )
         )
 
+    if alert is not None and volume_review is not None:
+        # The alert is built before narratives exist, so the linkage to the
+        # narrative cluster and temporal episode is attached here. These are
+        # the first overlapping finding, not a claim that every episode of the
+        # cluster is the same event.
+        alert["dataset_id"] = ordered_posts[0].dataset_id
+        alert["narrative_cluster_id"] = (
+            volume_review["related_narrative_ids"][0]
+            if volume_review["related_narrative_ids"]
+            else None
+        )
+        alert["episode_id"] = (
+            volume_review["related_episode_ids"][0]
+            if volume_review["related_episode_ids"]
+            else None
+        )
+        alert["detection_interval_start"] = datetime.fromisoformat(
+            volume_review["interval_start"]
+        )
+        alert["detection_interval_end"] = datetime.fromisoformat(
+            volume_review["interval_end"]
+        )
+        alert["detected_at"] = datetime.fromisoformat(volume_review["interval_start"])
+        alert["related_episode_ids"] = list(volume_review["related_episode_ids"])
+        alert["related_narrative_ids"] = list(volume_review["related_narrative_ids"])
+
     start = _evidence(ordered_posts[0])["timestamp"]
     end = _evidence(ordered_posts[-1])["timestamp"]
     episode_count = sum(len(narrative["episodes"]) for narrative in narratives)

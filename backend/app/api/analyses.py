@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import Alert, Analysis, Dataset, Post
 from app.schemas.analysis import AnalysisDetail, AnalystNote, AnalystNoteCreate
+from app.schemas.alert import AlertRead
+from app.services.alert_service import record_alert
 from app.services.analysis_service import (
     DEFAULT_TEMPORAL_GAP_HOURS,
     analyze_posts,
@@ -82,7 +84,7 @@ def create_dataset_analysis(
             db.add(analysis)
             db.flush()
             if alert_data is not None:
-                db.add(Alert(analysis_id=analysis.id, status="new", **alert_data))
+                record_alert(db, analysis.id, dataset_id, alert_data)
             db.flush()
             db.refresh(analysis)
             detail = _analysis_detail(db, analysis)
@@ -134,6 +136,26 @@ def get_analysis(
         raise HTTPException(
             status_code=503,
             detail="Database is unavailable while reading analysis",
+        ) from error
+
+@router.get("/analyses/{analysis_id}/alerts", response_model=list[AlertRead])
+def list_analysis_alerts(
+    analysis_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[AlertRead]:
+    try:
+        if db.get(Analysis, analysis_id) is None:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        alerts = db.scalars(
+            select(Alert)
+            .where(Alert.analysis_id == analysis_id)
+            .order_by(Alert.created_at, Alert.id)
+        ).all()
+        return [AlertRead.model_validate(alert) for alert in alerts]
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is unavailable while reading analysis alerts",
         ) from error
 
 @router.post(

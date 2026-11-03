@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity,
   Bell,
@@ -38,6 +38,15 @@ function App() {
   const [page, setPage] = useState<PageName>("overview");
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">("checking");
   const [apiError, setApiError] = useState<string | null>(null);
+  const [analysisFocusId, setAnalysisFocusId] = useState<string | null>(null);
+
+  const openAnalysis = useCallback((analysisId: string) => {
+    setAnalysisFocusId(analysisId);
+    setPage("analysis");
+    setMenuOpen(false);
+  }, []);
+
+  const clearAnalysisFocus = useCallback(() => setAnalysisFocusId(null), []);
 
   useEffect(() => {
     let active = true;
@@ -61,11 +70,24 @@ function App() {
       case "datasets":
         return <DatasetPage />;
       case "analysis":
-        return <AnalysisPage />;
+        return (
+          <AnalysisPage
+            focusAnalysisId={analysisFocusId}
+            onFocusConsumed={clearAnalysisFocus}
+          />
+        );
       case "alerts":
-        return <AlertsPage />;
+        return <AlertsPage onOpenAnalysis={openAnalysis} />;
       case "overview":
-        return <Dashboard apiError={apiError} />;
+        return (
+          <Dashboard
+            apiError={apiError}
+            onOpenAlerts={() => {
+              setPage("alerts");
+              setMenuOpen(false);
+            }}
+          />
+        );
     }
   }
 

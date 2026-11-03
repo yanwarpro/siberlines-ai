@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, sta
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
+from app.api.alerts import router as alerts_router
 from app.api.analyses import router as analyses_router
 from app.api.datasets import router as datasets_router
 from app.api.health import router as health_router
@@ -22,11 +23,12 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=False,
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_methods=["GET", "POST", "PATCH", "DELETE"],
     allow_headers=["Content-Type"],
 )
 app.include_router(health_router, prefix="/api/v1", tags=["health"])
 app.include_router(analyses_router, prefix="/api/v1")
+app.include_router(alerts_router, prefix="/api/v1")
 
 
 @app.post("/api/v1/datasets/upload", status_code=status.HTTP_201_CREATED)
