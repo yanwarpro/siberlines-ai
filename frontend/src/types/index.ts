@@ -39,12 +39,21 @@ export interface DatasetRecord {
   created_at: string;
 }
 
+export interface AnalystNote {
+  note_id: string;
+  episode_id: string | null;
+  narrative_cluster_id: string | null;
+  body: string;
+  created_at: string;
+}
+
 export interface AnalysisRecord {
   id: string;
   dataset_id: string;
   status: string;
   config_json: Record<string, unknown>;
   metrics_json: AnalysisMetrics;
+  notes_json?: AnalystNote[];
   created_at: string;
   completed_at: string | null;
   alerts: AnalysisAlert[];
@@ -55,6 +64,49 @@ export interface AnalysisEvidence {
   timestamp: string;
   source_id: string | null;
   text: string;
+}
+
+export interface AnalysisKeywordPresence {
+  term: string;
+  status: "new" | "disappeared" | "recurring" | "persistent";
+  first_episode_id: string;
+  last_episode_id: string;
+  episode_labels: string[];
+  presence: boolean[];
+}
+
+export interface AnalysisKeywordEvolution {
+  narrative_cluster_id: string;
+  method: string;
+  episode_count: number;
+  episode_terms: {
+    episode_id: string;
+    label: string;
+    terms: string[];
+  }[];
+  new_terms: string[];
+  disappeared_terms: string[];
+  recurring_terms: string[];
+  persistent_terms: string[];
+  terms: AnalysisKeywordPresence[];
+  explanation: string;
+}
+
+export interface AnalysisContextComparison {
+  comparison_id: string;
+  narrative_cluster_id: string;
+  from_episode_id: string;
+  to_episode_id: string;
+  from_label: string;
+  to_label: string;
+  from_post: AnalysisEvidence;
+  to_post: AnalysisEvidence;
+  shared_terms: string[];
+  introduced_terms: string[];
+  dropped_terms: string[];
+  term_overlap_ratio: number;
+  method: string;
+  explanation: string;
 }
 
 export interface AnalysisNarrative {
@@ -69,6 +121,8 @@ export interface AnalysisNarrative {
   evidence_post_ids?: string[];
   episodes?: AnalysisTemporalEpisode[];
   evolution?: AnalysisEpisodeTransition[];
+  keyword_evolution?: AnalysisKeywordEvolution | null;
+  context_comparisons?: AnalysisContextComparison[];
   unassigned_post_ids?: string[];
   evidence: AnalysisEvidence[];
 }
@@ -115,6 +169,8 @@ export interface AnalysisTemporalEpisode {
   distinct_source_count: number;
   top_terms?: string[];
   source_ids?: string[];
+  source_distribution?: { source_id: string | null; post_count: number }[];
+  hourly_volume?: { timestamp: string; count: number }[];
   representative_posts: AnalysisEvidence[];
   evidence_post_ids: string[];
   temporal_gap_threshold: number;

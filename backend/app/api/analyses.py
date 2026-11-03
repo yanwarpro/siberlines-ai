@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import Alert, Analysis, Dataset, Post
-from app.schemas.analysis import AnalysisDetail
+from app.schemas.analysis import AnalysisDetail, AnalystNote, AnalystNoteCreate
 from app.services.analysis_service import (
     DEFAULT_TEMPORAL_GAP_HOURS,
     analyze_posts,
@@ -29,6 +29,7 @@ def _analysis_detail(db: Session, analysis: Analysis) -> AnalysisDetail:
         status=analysis.status,
         config_json=analysis.config_json,
         metrics_json=analysis.metrics_json,
+        notes_json=analysis.notes_json or [],
         created_at=analysis.created_at,
         completed_at=analysis.completed_at,
         alerts=alerts,
@@ -134,3 +135,69 @@ def get_analysis(
             status_code=503,
             detail="Database is unavailable while reading analysis",
         ) from error
+
+@router.post(
+    "/analyses/{analysis_id}/notes",
+    response_model=AnalystNote,
+    status_code=201,
+)
+def create_analyst_note(
+    analysis_id: UUID,
+    payload: AnalystNoteCreate,
+    db: Session = Depends(get_db),
+) -> AnalystNote:
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=422, detail="Note body cannot be blank")
+    try:
+        with db.begin():
+            analysis = db.get(Analysis, analysis_id)
+            if analysis is None:
+                raise HTTPException(status_code=404, detail="Analysis not found")
+            note = {
+                "note_id": str(uuid4()),
+                "episode_id": payload.episode_id,
+                "narrative_cluster_id": payload.narrative_cluster_id,
+                "body": body,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            analysis.notes_json = [*(analysis.notes_json or []), note]
+            db.flush()
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is unavailable while saving the note",
+        ) from error
+
+    return AnalystNote(**note)
+
+@router.delete(
+    "/analyses/{analysis_id}/notes/{note_id}",
+    response_model=AnalysisDetail,
+)
+def delete_analyst_note(
+    analysis_id: UUID,
+    note_id: UUID,
+    db: Session = Depends(get_db),
+) -> AnalysisDetail:
+    try:
+        with db.begin():
+            analysis = db.get(Analysis, analysis_id)
+            if analysis is None:
+                raise HTTPException(status_code=404, detail="Analysis not found")
+            existing = analysis.notes_json or []
+            remaining = [
+                note for note in existing if note.get("note_id") != str(note_id)
+            ]
+            if len(remaining) == len(existing):
+                raise HTTPException(status_code=404, detail="Note not found")
+            analysis.notes_json = remaining
+            db.flush()
+            detail = _analysis_detail(db, analysis)
+    except SQLAlchemyError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Database is unavailable while deleting the note",
+        ) from error
+
+    return detail

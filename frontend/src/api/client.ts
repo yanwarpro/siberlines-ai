@@ -1,4 +1,9 @@
-import type { AnalysisRecord, DatasetRecord, HealthResponse } from "../types";
+import type {
+  AnalysisRecord,
+  AnalystNote,
+  DatasetRecord,
+  HealthResponse,
+} from "../types";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1").replace(
   /\/$/,
@@ -42,4 +47,32 @@ export function createDatasetAnalysis(
 
 export function getAnalysis(analysisId: string): Promise<AnalysisRecord> {
   return request<AnalysisRecord>(`/analyses/${encodeURIComponent(analysisId)}`);
+}
+
+export function createAnalystNote(
+  analysisId: string,
+  payload: {
+    body: string;
+    episode_id?: string | null;
+    narrative_cluster_id?: string | null;
+  },
+): Promise<AnalystNote> {
+  return request<AnalystNote>(
+    `/analyses/${encodeURIComponent(analysisId)}/notes`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function deleteAnalystNote(
+  analysisId: string,
+  noteId: string,
+): Promise<AnalysisRecord> {
+  return request<AnalysisRecord>(
+    `/analyses/${encodeURIComponent(analysisId)}/notes/${encodeURIComponent(noteId)}`,
+    { method: "DELETE" },
+  );
 }

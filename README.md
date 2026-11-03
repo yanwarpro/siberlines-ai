@@ -100,6 +100,8 @@ Dataset read responses deliberately omit descriptions, post text, authors, and r
 - `POST /api/v1/datasets/{dataset_id}/analyses?temporal_gap_hours=6` calculates and saves a completed run using the selected dataset's stored posts. The temporal gap is configurable per run (greater than 0 and at most 168 hours); it defaults to 6 hours.
 - `GET /api/v1/datasets/{dataset_id}/analyses` returns up to 50 saved runs for reopening in the UI.
 - `GET /api/v1/analyses/{analysis_id}` returns one saved run and its alert evidence.
+- `POST /api/v1/analyses/{analysis_id}/notes` appends an analyst note and returns the created note. `body` is required (1–4000 characters, surrounding whitespace stripped, blank rejected with `422`); `episode_id` and `narrative_cluster_id` are optional links back to automated findings.
+- `DELETE /api/v1/analyses/{analysis_id}/notes/{note_id}` removes one analyst note and returns the updated saved run.
 
 Narrative candidates use token-based TF-IDF cosine similarity (threshold `0.24`) and connected components. Each lexical cluster is then divided into temporal episodes when adjacent posts are more than the configured gap apart. Episodes require at least two posts; isolated posts remain linked to the cluster but are not presented as events. Episode and cluster evidence references point to original stored posts, and timestamps are normalized to UTC. The Analysis page shows the overall cluster range separately from each episode range and lets analysts configure the gap for a new run. Saved runs created before episode metadata existed remain readable and are marked as legacy rather than having episodes fabricated for them. Similarity is bounded to 2,500 posts and 1,000,000 candidate pairs; if those limits are exceeded, the run records a warning and omits similarity groups rather than returning a partial result. Hourly spikes require at least 24 prior hourly bins and 20 baseline posts; a candidate must also exceed the historical mean by three standard deviations and the relative-volume threshold. The backend persists a volume alert only when those checks pass and associates it only with episode(s) overlapping the signal window. These heuristics are review signals, not proof of coordination, misinformation, or intent. Evaluation columns such as `dataset_label` and `expected_topic` are not stored or used as model inputs.
 
@@ -110,6 +112,21 @@ Each narrative cluster in an analysis result carries an `evolution` array with o
 The accompanying `explanation` text is generated from those numbers only. It states what changed between two separate time windows and explicitly says that the comparison does not establish that the later discussion was caused by, coordinated with, or a continuation of the earlier one. Evolution entries do not classify content, score risk, or infer intent. The transition count is surfaced as `narrative_evolution_count` in the analysis summary and is rendered in the Analysis page as an expandable per-cluster section.
 
 Evolution metadata is additive inside the existing `analyses.metrics_json` result, so no schema migration is required. Saved runs written before evolution existed simply omit `evolution`, `top_terms`, and `source_ids`; the UI skips the section for those runs instead of inventing transitions.
+
+### Narrative evolution tracking
+
+Each narrative cluster also carries two cluster-wide comparison payloads that are computed from stored post text only:
+
+- `keyword_evolution` — frequent terms are extracted separately per episode and compared by presence. Each term is classified as `new` (first appears after the first episode), `disappeared` (stops appearing before the last episode), `recurring` (reappears after an internal gap), or `persistent` (present in every episode). The payload lists `episode_terms`, the four term buckets, a per-term presence matrix (`terms[].presence`), and the `first_episode_id`/`last_episode_id` where each term was observed. It is `null` when the cluster has fewer than two episodes.
+- `context_comparisons` — for each consecutive episode pair that has representative posts, the payload quotes the first representative post from each window verbatim, along with `shared_terms`, `introduced_terms`, `dropped_terms`, and a `term_overlap_ratio`. At most four comparisons are returned (`MAX_CONTEXT_COMPARISONS`). Quotations keep the original `post_id`, `timestamp`, and `source_id` so every quotation stays traceable to the stored post.
+
+Every episode additionally exposes `hourly_volume` (UTC hour buckets, including hours with zero posts, covering the episode span) and `source_distribution` (post counts per source, with `null` for posts lacking a source). Their totals always equal the episode `post_count`, and `peak_hour`/`peak_post_count` are derived from the same buckets.
+
+The generated `explanation` strings describe observable wording, volume, and source overlap only. They state explicitly that lexical similarity and temporal proximity do not establish intent, coordination, misinformation, or cause, and that shared sources alone do not imply coordination. No synthetic evaluation labels (`dataset_label`, `expected_topic`) are read at any point.
+
+Analyst notes are stored in the `analyses.notes_json` column, added by revision `0003_analysis_analyst_notes`. Notes are kept separate from automated findings: they are returned as `notes_json` alongside the untouched `metrics_json` and are never merged into evidence, clusters, or explanations. A note may link to an `episode_id` and `narrative_cluster_id`, but that link records analyst context rather than modifying the automated result. Saved runs created before revision `0003` remain readable because the column defaults to an empty array.
+
+The Analysis page renders this as a **Narrative evolution** section: a chronological episode timeline with a selector, keyword evolution chips plus an expandable presence matrix, verbatim context comparisons, an observed-volume line chart, a source distribution bar chart, and an analyst notes panel. All displayed times are labelled `UTC`. Runs saved before episode metadata existed show a legacy notice instead of synthesised episodes.
 
 Analysis responses include representative raw post text as evidence. The prototype API has no authentication or per-user authorization; do not upload confidential or personally sensitive posts to a publicly reachable deployment.
 
@@ -133,14 +150,21 @@ The initial Alembic revision creates:
 
 - `datasets`: UUID source/import metadata, stored row count, and lifecycle status.
 - `posts`: UUID dataset-linked records with timestamps, source IDs, text, and content hashes; the latest migration preserves repeated text and deduplicates only matching source/external IDs.
-- `analyses`: dataset-linked run status, JSON configuration/metrics, and completion timestamps.
+- `analyses`: dataset-linked run status, JSON configuration/metrics, completion timestamps, and analyst notes.
 - `alerts`: analysis-linked volume signals with baseline counts and JSON evidence.
 
-Temporal episode metadata is stored within the existing `analyses.metrics_json` JSONB result, and the selected gap is recorded in `analyses.config_json`. No schema migration is required.
+Temporal episode, keyword evolution, and context comparison metadata are stored within the existing `analyses.metrics_json` JSONB result, and the selected gap is recorded in `analyses.config_json`. Analyst notes live in `analyses.notes_json`, a non-null JSONB column with an empty-array server default added by revision `0003_analysis_analyst_notes`. That revision is the only schema change introduced by narrative evolution tracking, and it is required because notes must survive page reloads independently of the automated result.
 
 For a new database, apply migrations with `alembic upgrade head` from `backend/`. The migrations enable row-level security but do not add policies; use a trusted backend database role with the required table privileges, and do not expose database credentials to the frontend.
 
 The existing Supabase database was created outside Alembic and has no `alembic_version` table. Do not run `alembic upgrade head` against it: that attempts to create tables that already exist. Only after independently verifying that its tables, columns, types, defaults, indexes, constraints, and RLS state match revision `0001_initial`, mark that baseline from `backend/` with `alembic stamp 0001_initial`, then run `alembic upgrade head` to apply later revisions. `stamp` does not apply or validate schema changes. If the schema differs, reconcile it deliberately first. To roll a new database back by one revision, use `alembic downgrade -1`.
+
+Revision `0003_analysis_analyst_notes` must be applied before deploying a backend that reads or writes analyst notes, otherwise note requests fail against the missing `notes_json` column. Two paths are supported:
+
+- **Alembic path** (a database already stamped at `0001_initial` or created from `alembic upgrade head`): run `alembic upgrade head` from `backend/`.
+- **Supabase SQL path** (the existing hosted database): run [backend/scripts/supabase_0003_analyst_notes.sql](backend/scripts/supabase_0003_analyst_notes.sql) once in the Supabase SQL editor. The script is idempotent, adds `notes_json jsonb NOT NULL DEFAULT '[]'::jsonb`, backfills existing rows with an empty array, and includes the verification query and rollback statement.
+
+Applying `0003` is safe for existing saved runs: they return `notes_json: []` and every previously stored `metrics_json` result remains unchanged. Skip it only if you deploy the backend without the notes endpoints, in which case the Narrative evolution section will show the notes panel in its error state.
 
 ## Online deployment
 

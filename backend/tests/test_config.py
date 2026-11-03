@@ -56,3 +56,18 @@ def test_cors_origins_reject_paths_and_embedded_wildcards() -> None:
     for origin in ("https://app.example/path", "https://*.example"):
         with pytest.raises(ValidationError, match="Invalid exact CORS origin"):
             Settings(_env_file=None, cors_origins=[origin])
+
+
+def test_cors_preflight_allows_analyst_note_methods() -> None:
+    from app.main import app
+
+    cors = next(
+        middleware
+        for middleware in app.user_middleware
+        if middleware.cls.__name__ == "CORSMiddleware"
+    )
+    allowed = cors.kwargs["allow_methods"]
+
+    assert "GET" in allowed
+    assert "POST" in allowed
+    assert "DELETE" in allowed

@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   BarChart3,
   Clock3,
+  GitCompareArrows,
   Play,
   RefreshCw,
 } from "lucide-react";
@@ -22,11 +23,13 @@ import {
   getDatasetAnalyses,
   getDatasets,
 } from "../api/client";
+import { NarrativeEvolutionSection } from "../components/NarrativeEvolution";
 import type {
   AnalysisAlert,
   AnalysisEvidence,
   AnalysisMetrics,
   AnalysisRecord,
+  AnalystNote,
   DatasetRecord,
   VolumeReviewMetrics,
 } from "../types";
@@ -260,6 +263,9 @@ export default function AnalysisPage() {
   const hasLegacyNarratives = Boolean(
     metrics && metrics.summary.temporal_episode_count === undefined,
   );
+  const handleNotesChanged = useCallback((notes: AnalystNote[]) => {
+    setResult((current) => (current ? { ...current, notes_json: notes } : current));
+  }, []);
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 sm:py-10">
       <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
@@ -739,6 +745,26 @@ export default function AnalysisPage() {
                     ))}
                   </div>
                 )}
+              </section>
+
+              <section className="panel-card p-5 sm:p-6">
+                <div className="flex items-start gap-3">
+                  <GitCompareArrows size={18} className="mt-0.5 shrink-0 text-accent-400" />
+                  <div>
+                    <h2 className="text-sm font-semibold text-slate-200">Narrative evolution</h2>
+                    <p className="mt-1 text-xs text-slate-500">
+                      How the wording, volume, and sources of one narrative change across
+                      separate temporal episodes · UTC
+                    </p>
+                  </div>
+                </div>
+                <NarrativeEvolutionSection
+                  narratives={metrics.narratives}
+                  analysis={result}
+                  hasLegacyMetadata={hasLegacyNarratives}
+                  onNotesChanged={handleNotesChanged}
+                  onError={setError}
+                />
               </section>
 
               <section className="panel-card p-5 sm:p-6">

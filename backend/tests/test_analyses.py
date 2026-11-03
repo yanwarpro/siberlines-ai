@@ -7,7 +7,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Analysis, Dataset, Post
-from app.services.analysis_service import _episode_top_terms, analyze_posts
+from app.services.analysis_service import (
+    _context_comparisons,
+    _episode_top_terms,
+    _hourly_series,
+    _keyword_evolution,
+    _source_distribution,
+    analyze_posts,
+)
 from app.services.csv_service import parse_posts_csv
 
 SAMPLE_DATASET = (
@@ -439,3 +446,374 @@ def test_saved_analysis_exposes_evolution_metadata(
     assert reloaded.json()["metrics_json"]["narratives"] == (
         result["metrics_json"]["narratives"]
     )
+
+
+def _analyze_sample() -> tuple[dict, list[Post]]:
+    parsed = parse_posts_csv(SAMPLE_DATASET.read_bytes())
+    posts = [
+        Post(id=uuid4(), dataset_id=uuid4(), **row)
+        for row in parsed.records
+    ]
+    metrics, _ = analyze_posts(posts, temporal_gap_hours=6)
+    return metrics, posts
+
+
+def test_hourly_series_counts_posts_per_utc_hour() -> None:
+    posts = [
+        Post(
+            id=uuid4(),
+            dataset_id=uuid4(),
+            external_id=f"post-{index}",
+            timestamp=timestamp,
+            source_id="source-a",
+            text="Hourly bucket probe.",
+            content_hash=f"hash-{index}",
+        )
+        for index, timestamp in enumerate(
+            [
+                datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc),
+                datetime(2026, 10, 28, 14, 5, tzinfo=timezone.utc),
+                datetime(2026, 10, 28, 14, 59, tzinfo=timezone.utc),
+                datetime(2026, 10, 28, 15, 1, tzinfo=timezone.utc),
+            ]
+        )
+    ]
+
+    series = _hourly_series(posts)
+
+    assert [point["timestamp"] for point in series] == [
+        "2026-10-28T14:00:00+00:00",
+        "2026-10-28T15:00:00+00:00",
+    ]
+    assert [point["count"] for point in series] == [3, 1]
+
+
+def test_hourly_series_fills_hours_without_posts() -> None:
+    posts = [
+        Post(
+            id=uuid4(),
+            dataset_id=uuid4(),
+            external_id=f"post-{index}",
+            timestamp=timestamp,
+            source_id="source-a",
+            text="Gap filling probe.",
+            content_hash=f"hash-{index}",
+        )
+        for index, timestamp in enumerate(
+            [
+                datetime(2026, 10, 28, 9, 0, tzinfo=timezone.utc),
+                datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc),
+            ]
+        )
+    ]
+
+    series = _hourly_series(posts)
+
+    assert [point["count"] for point in series] == [1, 0, 0, 1]
+    assert len(series) == 4
+
+
+def test_source_distribution_counts_distinct_sources() -> None:
+    posts = [
+        Post(
+            id=uuid4(),
+            dataset_id=uuid4(),
+            external_id=f"post-{index}",
+            timestamp=datetime(2026, 10, 28, 12, index, tzinfo=timezone.utc),
+            source_id=source_id,
+            text="Source distribution probe.",
+            content_hash=f"hash-{index}",
+        )
+        for index, source_id in enumerate(["beta", "alpha", "alpha", None])
+    ]
+
+    distribution = _source_distribution(posts)
+
+    assert distribution == [
+        {"source_id": "alpha", "post_count": 2},
+        {"source_id": None, "post_count": 1},
+        {"source_id": "beta", "post_count": 1},
+    ]
+    assert sum(entry["post_count"] for entry in distribution) == len(posts)
+
+
+def test_keyword_evolution_classifies_terms_from_episode_text() -> None:
+    episodes = [
+        {
+            "episode_id": "episode-1",
+            "label": "Episode 1",
+            "top_terms": ["bridge", "closed"],
+        },
+        {
+            "episode_id": "episode-2",
+            "label": "Episode 2",
+            "top_terms": ["bridge", "traffic"],
+        },
+        {
+            "episode_id": "episode-3",
+            "label": "Episode 3",
+            "top_terms": ["bridge", "closed"],
+        },
+    ]
+
+    evolution = _keyword_evolution("narrative-1", episodes)
+
+    assert evolution is not None
+    assert evolution["episode_count"] == 3
+    assert evolution["persistent_terms"] == ["bridge"]
+    assert evolution["recurring_terms"] == ["closed"]
+    assert evolution["new_terms"] == ["traffic"]
+    assert evolution["disappeared_terms"] == []
+    status_by_term = {entry["term"]: entry["status"] for entry in evolution["terms"]}
+    assert status_by_term == {
+        "bridge": "persistent",
+        "closed": "recurring",
+        "traffic": "new",
+    }
+    closed = next(entry for entry in evolution["terms"] if entry["term"] == "closed")
+    assert closed["presence"] == [True, False, True]
+    assert closed["first_episode_id"] == "episode-1"
+    assert closed["last_episode_id"] == "episode-3"
+    assert closed["episode_labels"] == ["Episode 1", "Episode 3"]
+
+
+def test_keyword_evolution_requires_two_episodes() -> None:
+    assert _keyword_evolution(
+        "narrative-1",
+        [{"episode_id": "episode-1", "label": "Episode 1", "top_terms": ["bridge"]}],
+    ) is None
+
+
+def test_keyword_evolution_is_deterministic() -> None:
+    episodes = [
+        {
+            "episode_id": "episode-1",
+            "label": "Episode 1",
+            "top_terms": ["zebra", "alpha", "mike"],
+        },
+        {
+            "episode_id": "episode-2",
+            "label": "Episode 2",
+            "top_terms": ["yankee", "bravo", "charlie"],
+        },
+    ]
+
+    first = _keyword_evolution("narrative-1", episodes)
+    second = _keyword_evolution("narrative-1", episodes)
+
+    assert first == second
+    assert first is not None
+    # Terms are ordered by first appearance, alphabetical within an episode.
+    assert [entry["term"] for entry in first["terms"]] == [
+        "alpha",
+        "mike",
+        "zebra",
+        "bravo",
+        "charlie",
+        "yankee",
+    ]
+
+
+def test_context_comparisons_quote_original_posts() -> None:
+    episodes = [
+        {
+            "episode_id": "episode-1",
+            "narrative_cluster_id": "narrative-1",
+            "label": "Episode 1",
+            "top_terms": ["bertanya", "jembatan", "kenanga"],
+            "representative_posts": [
+                {
+                    "post_id": "post-a",
+                    "timestamp": "2026-10-26T09:00:00+00:00",
+                    "source_id": "source-a",
+                    "text": "Warga bertanya apakah jembatan kenanga ditutup.",
+                }
+            ],
+        },
+        {
+            "episode_id": "episode-2",
+            "narrative_cluster_id": "narrative-1",
+            "label": "Episode 2",
+            "top_terms": ["ditutup", "jembatan", "kenanga", "sore"],
+            "representative_posts": [
+                {
+                    "post_id": "post-b",
+                    "timestamp": "2026-10-28T14:00:00+00:00",
+                    "source_id": "source-b",
+                    "text": "Jembatan kenanga ditutup sore ini warga ramai.",
+                }
+            ],
+        },
+    ]
+
+    comparisons = _context_comparisons(episodes)
+
+    assert len(comparisons) == 1
+    comparison = comparisons[0]
+    assert comparison["from_episode_id"] == "episode-1"
+    assert comparison["to_episode_id"] == "episode-2"
+    assert comparison["from_post"]["post_id"] == "post-a"
+    assert comparison["to_post"]["post_id"] == "post-b"
+    assert comparison["from_post"]["text"].endswith("ditutup.")
+    assert comparison["to_post"]["source_id"] == "source-b"
+    assert comparison["shared_terms"] == ["jembatan", "kenanga"]
+    assert comparison["introduced_terms"] == ["ditutup", "sore"]
+    assert comparison["dropped_terms"] == ["bertanya"]
+    assert comparison["term_overlap_ratio"] == round(2 / 5, 3)
+    assert "do not establish intent or a causal relationship" in comparison[
+        "explanation"
+    ]
+
+
+def test_context_comparisons_skip_episodes_without_representatives() -> None:
+    episodes = [
+        {
+            "episode_id": "episode-1",
+            "narrative_cluster_id": "narrative-1",
+            "label": "Episode 1",
+            "top_terms": ["jembatan"],
+            "representative_posts": [],
+        },
+        {
+            "episode_id": "episode-2",
+            "narrative_cluster_id": "narrative-1",
+            "label": "Episode 2",
+            "top_terms": ["jembatan"],
+            "representative_posts": [
+                {
+                    "post_id": "post-b",
+                    "timestamp": "2026-10-28T14:00:00+00:00",
+                    "source_id": None,
+                    "text": "Jembatan kenanga ditutup.",
+                }
+            ],
+        },
+    ]
+
+    assert _context_comparisons(episodes) == []
+
+
+def test_episodes_expose_volume_and_source_series() -> None:
+    metrics, _ = _analyze_sample()
+
+    episodes = [
+        episode
+        for narrative in metrics["narratives"]
+        for episode in narrative["episodes"]
+    ]
+
+    assert episodes
+    for episode in episodes:
+        assert sum(
+            point["count"] for point in episode["hourly_volume"]
+        ) == episode["post_count"]
+        assert sum(
+            entry["post_count"] for entry in episode["source_distribution"]
+        ) == episode["post_count"]
+        assert len(episode["source_distribution"]) == episode["distinct_source_count"]
+        timestamps = [point["timestamp"] for point in episode["hourly_volume"]]
+        assert timestamps == sorted(timestamps)
+        peak = min(
+            episode["hourly_volume"],
+            key=lambda point: (-point["count"], point["timestamp"]),
+        )
+        assert episode["peak_hour"] == peak["timestamp"]
+        assert episode["peak_post_count"] == peak["count"]
+        assert episode["peak_post_count"] == max(
+            point["count"] for point in episode["hourly_volume"]
+        )
+
+
+def test_sample_dataset_exposes_keyword_and_context_evolution() -> None:
+    metrics, _ = _analyze_sample()
+
+    multi_episode = [
+        narrative
+        for narrative in metrics["narratives"]
+        if len(narrative["episodes"]) >= 2
+    ]
+
+    assert multi_episode
+    for narrative in metrics["narratives"]:
+        if len(narrative["episodes"]) >= 2:
+            assert narrative["keyword_evolution"] is not None
+            assert narrative["keyword_evolution"]["episode_count"] == len(
+                narrative["episodes"]
+            )
+            assert len(narrative["context_comparisons"]) == len(
+                narrative["episodes"]
+            ) - 1
+        else:
+            assert narrative["keyword_evolution"] is None
+            assert narrative["context_comparisons"] == []
+
+
+def test_analyst_notes_can_be_created_and_deleted(
+    api_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, test_session = api_client
+    parsed = parse_posts_csv(SAMPLE_DATASET.read_bytes())
+    dataset_id = _insert_posts(test_session, parsed.records)
+    analysis = client.post(f"/api/v1/datasets/{dataset_id}/analyses").json()
+    analysis_id = analysis["id"]
+    assert analysis["notes_json"] == []
+
+    created = client.post(
+        f"/api/v1/analyses/{analysis_id}/notes",
+        json={
+            "episode_id": "episode-1",
+            "narrative_cluster_id": "narrative-1",
+            "body": "  Analyst hypothesis to review.  ",
+        },
+    )
+
+    assert created.status_code == 201
+    note = created.json()
+    assert note["body"] == "Analyst hypothesis to review."
+    assert note["episode_id"] == "episode-1"
+    assert note["created_at"]
+
+    reloaded = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    assert len(reloaded["notes_json"]) == 1
+    assert reloaded["notes_json"][0]["note_id"] == note["note_id"]
+
+    deleted = client.delete(f"/api/v1/analyses/{analysis_id}/notes/{note['note_id']}")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["notes_json"] == []
+    assert client.get(f"/api/v1/analyses/{analysis_id}").json()["notes_json"] == []
+
+
+def test_analyst_notes_reject_blank_body(
+    api_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, test_session = api_client
+    parsed = parse_posts_csv(SAMPLE_DATASET.read_bytes())
+    dataset_id = _insert_posts(test_session, parsed.records)
+    analysis_id = client.post(f"/api/v1/datasets/{dataset_id}/analyses").json()["id"]
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis_id}/notes",
+        json={"body": "   "},
+    )
+
+    assert response.status_code == 422
+
+
+def test_analyst_notes_return_404_for_unknown_targets(
+    api_client: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, test_session = api_client
+
+    assert client.post(
+        f"/api/v1/analyses/{uuid4()}/notes",
+        json={"body": "Orphan note."},
+    ).status_code == 404
+
+    parsed = parse_posts_csv(SAMPLE_DATASET.read_bytes())
+    dataset_id = _insert_posts(test_session, parsed.records)
+    analysis_id = client.post(f"/api/v1/datasets/{dataset_id}/analyses").json()["id"]
+
+    assert client.delete(
+        f"/api/v1/analyses/{analysis_id}/notes/{uuid4()}"
+    ).status_code == 404

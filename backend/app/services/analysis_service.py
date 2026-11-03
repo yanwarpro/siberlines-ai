@@ -27,7 +27,10 @@ MIN_BASELINE_POSTS = 20
 MIN_EPISODE_SIZE = 2
 DEFAULT_TEMPORAL_GAP_HOURS = 6.0
 MAX_EVOLUTION_TERMS = 5
+MAX_CONTEXT_COMPARISONS = 4
 EVOLUTION_METHOD = "episode_term_volume_source_delta"
+KEYWORD_EVOLUTION_METHOD = "episode_term_presence_classification"
+CONTEXT_COMPARISON_METHOD = "episode_representative_post_quotation"
 
 
 def _tokens(text: str) -> set[str]:
@@ -63,6 +66,161 @@ def _episode_top_terms(
         counts.update(terms_by_post_id.get(str(post.id), set()))
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return [term for term, _ in ranked[:MAX_EVOLUTION_TERMS]]
+
+def _hourly_series(posts: list[Post]) -> list[dict[str, Any]]:
+    if not posts:
+        return []
+    counts: dict[datetime, int] = defaultdict(int)
+    for post in posts:
+        counts[_hour_key(post.timestamp)] += 1
+    first_hour = min(counts)
+    last_hour = max(counts)
+    series: list[dict[str, Any]] = []
+    cursor = first_hour
+    while cursor <= last_hour:
+        series.append(
+            {"timestamp": cursor.isoformat(), "count": counts.get(cursor, 0)}
+        )
+        cursor += timedelta(hours=1)
+    return series
+
+def _source_distribution(posts: list[Post]) -> list[dict[str, Any]]:
+    counts: Counter[str | None] = Counter(post.source_id for post in posts)
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0] or ""))
+    return [
+        {"source_id": source_id, "post_count": count}
+        for source_id, count in ranked
+    ]
+
+def _keyword_evolution(
+    narrative_id: str,
+    episodes: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if len(episodes) < 2:
+        return None
+
+    episode_terms = [
+        {
+            "episode_id": episode["episode_id"],
+            "label": episode["label"],
+            "terms": list(episode["top_terms"]),
+        }
+        for episode in episodes
+    ]
+
+    ordered_terms: list[str] = []
+    presence: dict[str, list[bool]] = {}
+    for index, episode in enumerate(episodes):
+        terms = set(episode["top_terms"])
+        for term in sorted(terms):
+            if term not in presence:
+                presence[term] = [False] * len(episodes)
+                ordered_terms.append(term)
+            presence[term][index] = True
+
+    details: list[dict[str, Any]] = []
+    new_terms: list[str] = []
+    disappeared_terms: list[str] = []
+    recurring_terms: list[str] = []
+    persistent_terms: list[str] = []
+    last_index = len(episodes) - 1
+    for term in ordered_terms:
+        flags = presence[term]
+        first_seen = flags.index(True)
+        last_seen = last_index - flags[::-1].index(True)
+        gaps = any(
+            not flags[index]
+            for index in range(first_seen, last_seen + 1)
+        )
+        if first_seen == 0 and last_seen == last_index and not gaps:
+            status = "persistent"
+            persistent_terms.append(term)
+        elif gaps:
+            status = "recurring"
+            recurring_terms.append(term)
+        elif first_seen > 0:
+            status = "new"
+            new_terms.append(term)
+        else:
+            status = "disappeared"
+            disappeared_terms.append(term)
+        details.append(
+            {
+                "term": term,
+                "status": status,
+                "first_episode_id": episodes[first_seen]["episode_id"],
+                "last_episode_id": episodes[last_seen]["episode_id"],
+                "episode_labels": [
+                    episodes[index]["label"]
+                    for index, present in enumerate(flags)
+                    if present
+                ],
+                "presence": flags,
+            }
+        )
+
+    return {
+        "narrative_cluster_id": narrative_id,
+        "method": KEYWORD_EVOLUTION_METHOD,
+        "episode_count": len(episodes),
+        "episode_terms": episode_terms,
+        "new_terms": sorted(new_terms),
+        "disappeared_terms": sorted(disappeared_terms),
+        "recurring_terms": sorted(recurring_terms),
+        "persistent_terms": sorted(persistent_terms),
+        "terms": details,
+        "explanation": (
+            f"Frequent terms were extracted separately from each of the "
+            f"{len(episodes)} episodes in this cluster and compared by presence. "
+            f"{len(new_terms)} terms first appear after the first episode, "
+            f"{len(disappeared_terms)} stop appearing before the last episode, "
+            f"{len(recurring_terms)} appear again after an absence, and "
+            f"{len(persistent_terms)} appear in every episode. This describes "
+            "observable wording only; it does not establish coordination, "
+            "misinformation, or cause."
+        ),
+    }
+
+def _context_comparisons(episodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    comparisons: list[dict[str, Any]] = []
+    for previous, current in zip(episodes, episodes[1:]):
+        if not previous["representative_posts"] or not current["representative_posts"]:
+            continue
+        previous_terms = set(previous["top_terms"])
+        current_terms = set(current["top_terms"])
+        shared_terms = sorted(previous_terms & current_terms)
+        union_terms = previous_terms | current_terms
+        comparisons.append(
+            {
+                "comparison_id": f"{previous['episode_id']}~{current['episode_id']}",
+                "narrative_cluster_id": previous["narrative_cluster_id"],
+                "from_episode_id": previous["episode_id"],
+                "to_episode_id": current["episode_id"],
+                "from_label": previous["label"],
+                "to_label": current["label"],
+                "from_post": previous["representative_posts"][0],
+                "to_post": current["representative_posts"][0],
+                "shared_terms": shared_terms,
+                "introduced_terms": sorted(current_terms - previous_terms),
+                "dropped_terms": sorted(previous_terms - current_terms),
+                "term_overlap_ratio": (
+                    round(len(shared_terms) / len(union_terms), 3)
+                    if union_terms
+                    else 0.0
+                ),
+                "method": CONTEXT_COMPARISON_METHOD,
+                "explanation": (
+                    f"Quoted posts from {previous['label']} and {current['label']} "
+                    f"share {len(shared_terms)} of {len(union_terms) or 0} frequent "
+                    "terms. Quotations are reproduced verbatim from stored posts and "
+                    "remain traceable by post ID. Wording differences describe the "
+                    "text only and do not establish intent or a causal relationship."
+                ),
+            }
+        )
+        if len(comparisons) >= MAX_CONTEXT_COMPARISONS:
+            break
+    return comparisons
 
 def _narrative_evolution(
     narrative_id: str,
@@ -208,6 +366,8 @@ def _temporal_episodes(
         )
         duration_seconds = int((end - start).total_seconds())
         episode_label = f"Episode {episode_number}"
+        hourly_volume = _hourly_series(segment)
+        source_distribution = _source_distribution(segment)
         episodes.append(
             {
                 "episode_id": f"{narrative_id}-episode-{episode_number}",
@@ -225,6 +385,8 @@ def _temporal_episodes(
                 "distinct_source_count": len(sources),
                 "top_terms": _episode_top_terms(segment, terms_by_post_id),
                 "source_ids": sorted(sources),
+                "source_distribution": source_distribution,
+                "hourly_volume": hourly_volume,
                 "representative_posts": representatives,
                 "evidence_post_ids": [str(post.id) for post in segment],
                 "temporal_gap_threshold": temporal_gap_hours,
@@ -359,9 +521,12 @@ def _similar_narratives(
         )
         top_terms = [
             term
-            for term, _ in Counter(
-                term for index in ordered_indices for term in documents[index]
-            ).most_common(4)
+            for term, _ in sorted(
+                Counter(
+                    term for index in ordered_indices for term in documents[index]
+                ).items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:4]
         ]
         narratives.append(
             {
@@ -379,6 +544,8 @@ def _similar_narratives(
                 "evidence_post_ids": [str(posts[index].id) for index in ordered_indices],
                 "episodes": episodes,
                 "evolution": _narrative_evolution(narrative_id, episodes),
+                "keyword_evolution": _keyword_evolution(narrative_id, episodes),
+                "context_comparisons": _context_comparisons(episodes),
                 "unassigned_post_ids": unassigned_post_ids,
                 "evidence": [
                     _evidence(posts[index])
