@@ -20,6 +20,10 @@ frontend/.vite/
 data/samples/*.csv
 !data/samples/template_posts.csv
 
+# Local dataset uploads used during manual testing
+data/samples/*.xlsx
+data/samples/*.xls
+
 # Editors and OS
 .vscode/
 .idea/
