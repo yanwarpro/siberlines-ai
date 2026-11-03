@@ -1,6 +1,6 @@
 import math
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -19,10 +19,15 @@ MIN_GROUP_SIZE = 2
 MAX_SIMILARITY_POSTS = 2_500
 MAX_CANDIDATE_PAIRS = 1_000_000
 MAX_GROUP_EVIDENCE = 5
+MAX_EPISODE_REPRESENTATIVES = 3
 MAX_NARRATIVE_GROUPS = 8
 MAX_SPIKE_EVIDENCE = 8
 MIN_BASELINE_HOURS = 24
 MIN_BASELINE_POSTS = 20
+MIN_EPISODE_SIZE = 2
+DEFAULT_TEMPORAL_GAP_HOURS = 6.0
+MAX_EVOLUTION_TERMS = 5
+EVOLUTION_METHOD = "episode_term_volume_source_delta"
 
 
 def _tokens(text: str) -> set[str]:
@@ -34,18 +39,217 @@ def _tokens(text: str) -> set[str]:
 
 
 def _evidence(post: Post) -> dict[str, Any]:
-    timestamp = post.timestamp
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    timestamp = _utc_timestamp(post.timestamp)
     return {
         "post_id": str(post.id),
-        "timestamp": timestamp.astimezone(timezone.utc).isoformat(),
+        "timestamp": timestamp.isoformat(),
         "source_id": post.source_id,
         "text": post.text,
     }
 
 
-def _similar_narratives(posts: list[Post]) -> tuple[list[dict[str, Any]], str | None]:
+def _utc_timestamp(timestamp: datetime) -> datetime:
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def _episode_top_terms(
+    segment: list[Post],
+    terms_by_post_id: dict[str, set[str]],
+) -> list[str]:
+    counts: Counter[str] = Counter()
+    for post in segment:
+        counts.update(terms_by_post_id.get(str(post.id), set()))
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return [term for term, _ in ranked[:MAX_EVOLUTION_TERMS]]
+
+def _narrative_evolution(
+    narrative_id: str,
+    episodes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    transitions: list[dict[str, Any]] = []
+    for previous, current in zip(episodes, episodes[1:]):
+        previous_terms = set(previous["top_terms"])
+        current_terms = set(current["top_terms"])
+        previous_sources = set(previous["source_ids"])
+        current_sources = set(current["source_ids"])
+        union_terms = previous_terms | current_terms
+        shared_terms = sorted(previous_terms & current_terms)
+        introduced_terms = sorted(current_terms - previous_terms)
+        dropped_terms = sorted(previous_terms - current_terms)
+        gap_hours = round(
+            (
+                datetime.fromisoformat(current["episode_start"])
+                - datetime.fromisoformat(previous["episode_end"])
+            ).total_seconds()
+            / 3600,
+            2,
+        )
+        post_delta = current["post_count"] - previous["post_count"]
+        if post_delta > 0:
+            volume_direction = "higher"
+        elif post_delta < 0:
+            volume_direction = "lower"
+        else:
+            volume_direction = "unchanged"
+        shared_sources = sorted(previous_sources & current_sources)
+        new_sources = sorted(current_sources - previous_sources)
+        transitions.append(
+            {
+                "transition_id": f"{previous['episode_id']}->{current['episode_id']}",
+                "narrative_cluster_id": narrative_id,
+                "from_episode_id": previous["episode_id"],
+                "to_episode_id": current["episode_id"],
+                "from_label": previous["label"],
+                "to_label": current["label"],
+                "from_episode_end": previous["episode_end"],
+                "to_episode_start": current["episode_start"],
+                "gap_between_episodes_hours": gap_hours,
+                "from_post_count": previous["post_count"],
+                "to_post_count": current["post_count"],
+                "post_count_delta": post_delta,
+                "volume_direction": volume_direction,
+                "from_source_count": previous["distinct_source_count"],
+                "to_source_count": current["distinct_source_count"],
+                "shared_source_count": len(shared_sources),
+                "new_source_count": len(new_sources),
+                "shared_terms": shared_terms,
+                "introduced_terms": introduced_terms,
+                "dropped_terms": dropped_terms,
+                "term_overlap_ratio": (
+                    round(len(shared_terms) / len(union_terms), 3)
+                    if union_terms
+                    else 0.0
+                ),
+                "method": EVOLUTION_METHOD,
+                "explanation": (
+                    f"{current['label']} starts {gap_hours:g} hours after "
+                    f"{previous['label']} ends and contains "
+                    f"{current['post_count']} posts versus {previous['post_count']} "
+                    f"({volume_direction} volume). "
+                    f"{len(shared_terms)} of {len(union_terms) or 0} frequent terms are "
+                    f"shared, {len(new_sources)} of {current['distinct_source_count']} "
+                    "sources are new to this episode. This compares observable "
+                    "vocabulary, volume, and source overlap between two separate time "
+                    "windows; it does not establish that the later discussion was "
+                    "caused by, coordinated with, or a continuation of the earlier one."
+                ),
+            }
+        )
+    return transitions
+
+def _temporal_episodes(
+    posts: list[Post],
+    narrative_id: str,
+    temporal_gap_hours: float,
+    volume_review: dict[str, Any] | None,
+    terms_by_post_id: dict[str, set[str]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    ordered_posts = sorted(posts, key=lambda post: _utc_timestamp(post.timestamp))
+    gap = timedelta(hours=temporal_gap_hours)
+    segments: list[list[Post]] = []
+    for post in ordered_posts:
+        if (
+            not segments
+            or _utc_timestamp(post.timestamp)
+            - _utc_timestamp(segments[-1][-1].timestamp)
+            > gap
+        ):
+            segments.append([post])
+        else:
+            segments[-1].append(post)
+
+    spike_start = (
+        datetime.fromisoformat(volume_review["interval_start"])
+        if volume_review is not None
+        else None
+    )
+    spike_end = (
+        datetime.fromisoformat(volume_review["interval_end"])
+        if volume_review is not None
+        else None
+    )
+    episodes: list[dict[str, Any]] = []
+    unassigned_post_ids: list[str] = []
+    for segment in segments:
+        if len(segment) < MIN_EPISODE_SIZE:
+            unassigned_post_ids.extend(str(post.id) for post in segment)
+            continue
+
+        episode_number = len(episodes) + 1
+        segment = sorted(segment, key=lambda post: _utc_timestamp(post.timestamp))
+        hourly_counts: dict[datetime, int] = defaultdict(int)
+        for post in segment:
+            hourly_counts[_hour_key(post.timestamp)] += 1
+        peak_hour = min(
+            hourly_counts,
+            key=lambda hour: (-hourly_counts[hour], hour),
+        )
+        start = _utc_timestamp(segment[0].timestamp)
+        end = _utc_timestamp(segment[-1].timestamp)
+        sources = {post.source_id for post in segment if post.source_id}
+        evidence = [_evidence(post) for post in segment]
+        representatives = [
+            evidence[index]
+            for index in sorted(
+                {0, len(evidence) // 2, len(evidence) - 1}
+            )
+        ][:MAX_EPISODE_REPRESENTATIVES]
+        has_volume_spike = bool(
+            spike_start is not None
+            and spike_end is not None
+            and any(
+                spike_start
+                <= _utc_timestamp(post.timestamp)
+                < spike_end
+                for post in segment
+            )
+        )
+        duration_seconds = int((end - start).total_seconds())
+        episode_label = f"Episode {episode_number}"
+        episodes.append(
+            {
+                "episode_id": f"{narrative_id}-episode-{episode_number}",
+                "narrative_cluster_id": narrative_id,
+                "label": episode_label,
+                "episode_start": start.isoformat(),
+                "episode_end": end.isoformat(),
+                "duration": {
+                    "seconds": duration_seconds,
+                    "hours": round(duration_seconds / 3600, 4),
+                },
+                "post_count": len(segment),
+                "peak_hour": peak_hour.isoformat(),
+                "peak_post_count": hourly_counts[peak_hour],
+                "distinct_source_count": len(sources),
+                "top_terms": _episode_top_terms(segment, terms_by_post_id),
+                "source_ids": sorted(sources),
+                "representative_posts": representatives,
+                "evidence_post_ids": [str(post.id) for post in segment],
+                "temporal_gap_threshold": temporal_gap_hours,
+                "clustering_method": "normalized_token_tfidf_cosine_connected_components",
+                "similarity_threshold": SIMILARITY_THRESHOLD,
+                "volume_spike_detected": has_volume_spike,
+                "evidence_sufficient": len(segment) >= MIN_EPISODE_SIZE,
+                "explanation": (
+                    f"Lexically similar posts were observed from "
+                    f"{start.isoformat()} to {end.isoformat()} UTC across "
+                    f"{len(segment)} posts and {len(sources)} distinct sources. "
+                    f"{'A detected hourly volume spike overlaps this episode. ' if has_volume_spike else 'No detected hourly volume spike overlaps this episode. '}"
+                    "This is a time-bounded evidence group for analyst review, not evidence "
+                    "of coordination, misinformation, or intent."
+                ),
+            }
+        )
+    return episodes, unassigned_post_ids
+
+
+def _similar_narratives(
+    posts: list[Post],
+    temporal_gap_hours: float,
+    volume_review: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], str | None]:
     if len(posts) > MAX_SIMILARITY_POSTS:
         return [], (
             f"Similarity analysis was skipped because this method is limited to "
@@ -118,7 +322,7 @@ def _similar_narratives(posts: list[Post]) -> tuple[list[dict[str, Any]], str | 
     grouped.sort(
         key=lambda indices: (
             -len(indices),
-            min(posts[index].timestamp for index in indices),
+            min(_utc_timestamp(posts[index].timestamp) for index in indices),
         )
     )
 
@@ -132,17 +336,38 @@ def _similar_narratives(posts: list[Post]) -> tuple[list[dict[str, Any]], str | 
                 pair_counts[root] += 1
 
     narratives: list[dict[str, Any]] = []
+    terms_by_post_id = {
+        str(posts[index].id): documents[index] for index in range(document_count)
+    }
     for group_number, indices in enumerate(grouped[:MAX_NARRATIVE_GROUPS], start=1):
-        ordered_indices = sorted(indices, key=lambda index: posts[index].timestamp)
+        ordered_indices = sorted(
+            indices, key=lambda index: _utc_timestamp(posts[index].timestamp)
+        )
         representative = max(
             ordered_indices,
             key=lambda index: (len(documents[index]), -index),
         )
         root = find(indices[0])
+        narrative_id = f"narrative-{group_number}"
+        group_posts = [posts[index] for index in ordered_indices]
+        episodes, unassigned_post_ids = _temporal_episodes(
+            group_posts,
+            narrative_id,
+            temporal_gap_hours,
+            volume_review,
+            terms_by_post_id,
+        )
+        top_terms = [
+            term
+            for term, _ in Counter(
+                term for index in ordered_indices for term in documents[index]
+            ).most_common(4)
+        ]
         narratives.append(
             {
-                "id": f"narrative-{group_number}",
-                "label": "Similar text group",
+                "id": narrative_id,
+                "label": f"Narrative cluster {group_number}",
+                "top_terms": top_terms,
                 "post_count": len(indices),
                 "mean_similarity": round(
                     pair_totals[root] / pair_counts[root] if pair_counts[root] else 0,
@@ -151,6 +376,10 @@ def _similar_narratives(posts: list[Post]) -> tuple[list[dict[str, Any]], str | 
                 "start_time": _evidence(posts[ordered_indices[0]])["timestamp"],
                 "end_time": _evidence(posts[ordered_indices[-1]])["timestamp"],
                 "representative_text": posts[representative].text,
+                "evidence_post_ids": [str(posts[index].id) for index in ordered_indices],
+                "episodes": episodes,
+                "evolution": _narrative_evolution(narrative_id, episodes),
+                "unassigned_post_ids": unassigned_post_ids,
                 "evidence": [
                     _evidence(posts[index])
                     for index in ordered_indices[:MAX_GROUP_EVIDENCE]
@@ -275,18 +504,44 @@ def _trend_and_spike(
     return trend, alert, True, None, volume_review
 
 
-def analyze_posts(posts: list[Post]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+def analyze_posts(
+    posts: list[Post],
+    temporal_gap_hours: float = DEFAULT_TEMPORAL_GAP_HOURS,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if not posts:
         raise ValueError("Cannot analyze a dataset with no posts")
+    if not math.isfinite(temporal_gap_hours) or temporal_gap_hours <= 0:
+        raise ValueError("Temporal gap threshold must be a positive number of hours")
 
-    ordered_posts = sorted(posts, key=lambda post: post.timestamp)
-    narratives, similarity_warning = _similar_narratives(ordered_posts)
+    ordered_posts = sorted(posts, key=lambda post: _utc_timestamp(post.timestamp))
     trend, alert, baseline_sufficient, baseline_warning, volume_review = _trend_and_spike(
         ordered_posts
     )
+    narratives, similarity_warning = _similar_narratives(
+        ordered_posts,
+        temporal_gap_hours,
+        volume_review,
+    )
+    if volume_review is not None:
+        related_episodes = [
+            episode
+            for narrative in narratives
+            for episode in narrative["episodes"]
+            if episode["volume_spike_detected"]
+        ]
+        volume_review["related_episode_ids"] = [
+            episode["episode_id"] for episode in related_episodes
+        ]
+        volume_review["related_narrative_ids"] = list(
+            dict.fromkeys(
+                episode["narrative_cluster_id"] for episode in related_episodes
+            )
+        )
 
     start = _evidence(ordered_posts[0])["timestamp"]
     end = _evidence(ordered_posts[-1])["timestamp"]
+    episode_count = sum(len(narrative["episodes"]) for narrative in narratives)
+    transition_count = sum(len(narrative["evolution"]) for narrative in narratives)
     warnings = [
         warning
         for warning in (similarity_warning, baseline_warning)
@@ -298,6 +553,9 @@ def analyze_posts(posts: list[Post]) -> tuple[dict[str, Any], dict[str, Any] | N
             "start_time": start,
             "end_time": end,
             "narrative_group_count": len(narratives),
+            "temporal_episode_count": episode_count,
+            "narrative_evolution_count": transition_count,
+            "temporal_gap_threshold_hours": temporal_gap_hours,
             "alert_count": 1 if alert else 0,
             "baseline_sufficient": baseline_sufficient,
             "similarity_threshold": SIMILARITY_THRESHOLD,
@@ -307,8 +565,16 @@ def analyze_posts(posts: list[Post]) -> tuple[dict[str, Any], dict[str, Any] | N
         "volume_review": volume_review,
         "warnings": warnings,
         "methodology": (
-            "Narrative groups use normalized-token TF-IDF cosine similarity and connected "
-            "components. Volume alerts compare hourly counts with the preceding hourly "
+            "Narrative clusters use normalized-token TF-IDF cosine similarity and connected "
+            f"components (similarity threshold {SIMILARITY_THRESHOLD:.2f}). Each cluster is "
+            f"segmented into temporal episodes when adjacent posts are more than "
+            f"{temporal_gap_hours:g} hours apart; episodes require at least "
+            f"{MIN_EPISODE_SIZE} posts, and isolated posts remain unassigned. All times are "
+            "UTC. Episode evolution entries compare the observable vocabulary, post "
+            "volume, and source overlap of consecutive episodes in the same cluster; they "
+            "describe change between separate time windows and do not establish "
+            "continuation, coordination, or cause. Volume alerts compare hourly counts "
+            "with the preceding hourly "
             "history; an alert is created only with at least 24 baseline hours and 20 "
             "baseline posts. These heuristics support review and are not proof of "
             "coordination, misinformation, or intent."

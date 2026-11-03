@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models import Alert, Analysis, Dataset, Post
 from app.schemas.analysis import AnalysisDetail
-from app.services.analysis_service import analyze_posts
+from app.services.analysis_service import (
+    DEFAULT_TEMPORAL_GAP_HOURS,
+    analyze_posts,
+)
 
 router = APIRouter(tags=["analyses"])
 
@@ -39,6 +42,11 @@ def _analysis_detail(db: Session, analysis: Analysis) -> AnalysisDetail:
 )
 def create_dataset_analysis(
     dataset_id: UUID,
+    temporal_gap_hours: float = Query(
+        default=DEFAULT_TEMPORAL_GAP_HOURS,
+        gt=0,
+        le=168,
+    ),
     db: Session = Depends(get_db),
 ) -> AnalysisDetail:
     try:
@@ -58,13 +66,14 @@ def create_dataset_analysis(
                     detail="Cannot analyze a dataset with no posts",
                 )
 
-            metrics, alert_data = analyze_posts(posts)
+            metrics, alert_data = analyze_posts(posts, temporal_gap_hours)
             analysis = Analysis(
                 dataset_id=dataset_id,
                 status="completed",
                 config_json={
                     "method": "tfidf_cosine_and_hourly_baseline",
                     "similarity_threshold": metrics["summary"]["similarity_threshold"],
+                    "temporal_gap_hours": temporal_gap_hours,
                 },
                 metrics_json=metrics,
                 completed_at=datetime.now(timezone.utc),

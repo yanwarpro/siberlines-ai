@@ -97,11 +97,19 @@ Dataset read responses deliberately omit descriptions, post text, authors, and r
 
 ### Persisted dataset analysis
 
-- `POST /api/v1/datasets/{dataset_id}/analyses` calculates and saves a completed run using the selected dataset's stored posts.
+- `POST /api/v1/datasets/{dataset_id}/analyses?temporal_gap_hours=6` calculates and saves a completed run using the selected dataset's stored posts. The temporal gap is configurable per run (greater than 0 and at most 168 hours); it defaults to 6 hours.
 - `GET /api/v1/datasets/{dataset_id}/analyses` returns up to 50 saved runs for reopening in the UI.
 - `GET /api/v1/analyses/{analysis_id}` returns one saved run and its alert evidence.
 
-Narrative candidates use token-based TF-IDF cosine similarity (threshold `0.24`) and connected components; the displayed sample texts and source/timestamp evidence come from the stored posts. Similarity is bounded to 2,500 posts and 1,000,000 candidate pairs; if those limits are exceeded, the run records a warning and omits similarity groups rather than returning a partial result. Hourly spikes require at least 24 prior hourly bins and 20 baseline posts; a candidate must also exceed the historical mean by three standard deviations and the relative-volume threshold. The backend persists a volume alert only when those checks pass. These heuristics are review signals, not proof of coordination, misinformation, or intent. Evaluation columns such as `dataset_label` and `expected_topic` are not stored or used as model inputs.
+Narrative candidates use token-based TF-IDF cosine similarity (threshold `0.24`) and connected components. Each lexical cluster is then divided into temporal episodes when adjacent posts are more than the configured gap apart. Episodes require at least two posts; isolated posts remain linked to the cluster but are not presented as events. Episode and cluster evidence references point to original stored posts, and timestamps are normalized to UTC. The Analysis page shows the overall cluster range separately from each episode range and lets analysts configure the gap for a new run. Saved runs created before episode metadata existed remain readable and are marked as legacy rather than having episodes fabricated for them. Similarity is bounded to 2,500 posts and 1,000,000 candidate pairs; if those limits are exceeded, the run records a warning and omits similarity groups rather than returning a partial result. Hourly spikes require at least 24 prior hourly bins and 20 baseline posts; a candidate must also exceed the historical mean by three standard deviations and the relative-volume threshold. The backend persists a volume alert only when those checks pass and associates it only with episode(s) overlapping the signal window. These heuristics are review signals, not proof of coordination, misinformation, or intent. Evaluation columns such as `dataset_label` and `expected_topic` are not stored or used as model inputs.
+
+### Narrative evolution between episodes
+
+Each narrative cluster in an analysis result carries an `evolution` array with one entry per consecutive episode pair (a cluster with `n` episodes yields `n - 1` transitions; a single-episode cluster yields an empty array). Each transition compares only observable properties of the two windows: the gap in hours between the earlier episode's end and the later episode's start, post counts and their delta, source totals and how many sources are new, the frequent terms the episodes share, introduce, or drop, and the resulting term-overlap ratio. Every episode also exposes `top_terms` and `source_ids` so the comparison can be traced back to the stored posts.
+
+The accompanying `explanation` text is generated from those numbers only. It states what changed between two separate time windows and explicitly says that the comparison does not establish that the later discussion was caused by, coordinated with, or a continuation of the earlier one. Evolution entries do not classify content, score risk, or infer intent. The transition count is surfaced as `narrative_evolution_count` in the analysis summary and is rendered in the Analysis page as an expandable per-cluster section.
+
+Evolution metadata is additive inside the existing `analyses.metrics_json` result, so no schema migration is required. Saved runs written before evolution existed simply omit `evolution`, `top_terms`, and `source_ids`; the UI skips the section for those runs instead of inventing transitions.
 
 Analysis responses include representative raw post text as evidence. The prototype API has no authentication or per-user authorization; do not upload confidential or personally sensitive posts to a publicly reachable deployment.
 
@@ -127,6 +135,8 @@ The initial Alembic revision creates:
 - `posts`: UUID dataset-linked records with timestamps, source IDs, text, and content hashes; the latest migration preserves repeated text and deduplicates only matching source/external IDs.
 - `analyses`: dataset-linked run status, JSON configuration/metrics, and completion timestamps.
 - `alerts`: analysis-linked volume signals with baseline counts and JSON evidence.
+
+Temporal episode metadata is stored within the existing `analyses.metrics_json` JSONB result, and the selected gap is recorded in `analyses.config_json`. No schema migration is required.
 
 For a new database, apply migrations with `alembic upgrade head` from `backend/`. The migrations enable row-level security but do not add policies; use a trusted backend database role with the required table privileges, and do not expose database credentials to the frontend.
 

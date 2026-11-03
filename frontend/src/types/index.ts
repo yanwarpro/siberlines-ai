@@ -60,12 +60,69 @@ export interface AnalysisEvidence {
 export interface AnalysisNarrative {
   id: string;
   label: string;
+  top_terms?: string[];
   post_count: number;
   mean_similarity: number;
   start_time: string;
   end_time: string;
   representative_text: string;
+  evidence_post_ids?: string[];
+  episodes?: AnalysisTemporalEpisode[];
+  evolution?: AnalysisEpisodeTransition[];
+  unassigned_post_ids?: string[];
   evidence: AnalysisEvidence[];
+}
+
+export interface AnalysisEpisodeTransition {
+  transition_id: string;
+  narrative_cluster_id: string;
+  from_episode_id: string;
+  to_episode_id: string;
+  from_label: string;
+  to_label: string;
+  from_episode_end: string;
+  to_episode_start: string;
+  gap_between_episodes_hours: number;
+  from_post_count: number;
+  to_post_count: number;
+  post_count_delta: number;
+  volume_direction: "higher" | "lower" | "unchanged";
+  from_source_count: number;
+  to_source_count: number;
+  shared_source_count: number;
+  new_source_count: number;
+  shared_terms: string[];
+  introduced_terms: string[];
+  dropped_terms: string[];
+  term_overlap_ratio: number;
+  method: string;
+  explanation: string;
+}
+
+export interface AnalysisTemporalEpisode {
+  episode_id: string;
+  narrative_cluster_id: string;
+  label: string;
+  episode_start: string;
+  episode_end: string;
+  duration: {
+    seconds: number;
+    hours: number;
+  };
+  post_count: number;
+  peak_hour: string;
+  peak_post_count: number;
+  distinct_source_count: number;
+  top_terms?: string[];
+  source_ids?: string[];
+  representative_posts: AnalysisEvidence[];
+  evidence_post_ids: string[];
+  temporal_gap_threshold: number;
+  clustering_method: string;
+  similarity_threshold: number;
+  volume_spike_detected: boolean;
+  evidence_sufficient: boolean;
+  explanation: string;
 }
 
 export interface AnalysisAlert {
@@ -87,6 +144,9 @@ export interface AnalysisMetrics {
     start_time: string;
     end_time: string;
     narrative_group_count: number;
+    temporal_episode_count?: number;
+    narrative_evolution_count?: number;
+    temporal_gap_threshold_hours?: number;
     alert_count: number;
     baseline_sufficient: boolean;
     similarity_threshold: number;
@@ -109,4 +169,6 @@ export interface VolumeReviewMetrics {
   observed_count: number;
   standard_score: number;
   observed_to_baseline_ratio: number;
+  related_episode_ids?: string[];
+  related_narrative_ids?: string[];
 }

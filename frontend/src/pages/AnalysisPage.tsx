@@ -42,6 +42,18 @@ function formatDate(value: string): string {
       }).format(date);
 }
 
+function formatDuration(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} hr ${remainingMinutes} min` : `${hours} hr`;
+}
+
+function formatGapHours(hours: number): string {
+  return Number.isFinite(hours) ? hours.toFixed(2).replace(/\.?0+$/, "") : "unknown";
+}
+
 function EvidenceList({ evidence }: { evidence: AnalysisEvidence[] }) {
   if (evidence.length === 0) {
     return <p className="text-xs text-slate-500">No sample posts were attached.</p>;
@@ -111,6 +123,7 @@ function getVolumeReview(
 export default function AnalysisPage() {
   const [datasets, setDatasets] = useState<DatasetRecord[]>([]);
   const [datasetId, setDatasetId] = useState("");
+  const [temporalGapHours, setTemporalGapHours] = useState(6);
   const [analyses, setAnalyses] = useState<AnalysisRecord[]>([]);
   const [analysisId, setAnalysisId] = useState("");
   const [result, setResult] = useState<AnalysisRecord | null>(null);
@@ -199,7 +212,7 @@ export default function AnalysisPage() {
     setError(null);
     setResult(null);
     try {
-      const analysis = await createDatasetAnalysis(datasetId);
+      const analysis = await createDatasetAnalysis(datasetId, temporalGapHours);
       setAnalyses((current) => [
         analysis,
         ...current.filter((record) => record.id !== analysis.id),
@@ -217,6 +230,9 @@ export default function AnalysisPage() {
   const selectedDataset = datasets.find((dataset) => dataset.id === datasetId);
   const selectedSignal = result?.alerts.find((alert) => alert.id === selectedSignalId);
   const volumeReview = getVolumeReview(metrics, selectedSignal);
+  const selectedSignalEvidenceIds = new Set(
+    selectedSignal?.evidence_json.map((evidence) => evidence.post_id) ?? [],
+  );
   const relatedNarratives =
     selectedSignal && metrics
       ? metrics.narratives
@@ -224,18 +240,26 @@ export default function AnalysisPage() {
             const alertEvidenceIds = new Set(
               selectedSignal.evidence_json.map((evidence) => evidence.post_id),
             );
+            const relatedEpisodeIds = new Set(volumeReview?.related_episode_ids ?? []);
+            const episodes = (group.episodes ?? []).filter(
+              (episode) =>
+                relatedEpisodeIds.has(episode.episode_id) ||
+                episode.evidence_post_ids.some((id) => alertEvidenceIds.has(id)),
+            );
             const sharedEvidenceCount = group.evidence.filter((evidence) =>
               alertEvidenceIds.has(evidence.post_id),
             ).length;
-            return { group, sharedEvidenceCount };
+            return { group, episodes, sharedEvidenceCount };
           })
-          .filter(({ sharedEvidenceCount }) => sharedEvidenceCount > 0)
+          .filter(
+            ({ group, episodes, sharedEvidenceCount }) =>
+              episodes.length > 0 ||
+              (group.episodes === undefined && sharedEvidenceCount > 0),
+          )
       : [];
-  const largestGroupSize = Math.max(
-    1,
-    ...((metrics?.narratives ?? []).map((group) => group.post_count)),
+  const hasLegacyNarratives = Boolean(
+    metrics && metrics.summary.temporal_episode_count === undefined,
   );
-
   return (
     <div className="mx-auto max-w-[1440px] px-5 py-8 sm:px-8 sm:py-10">
       <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
@@ -262,10 +286,31 @@ export default function AnalysisPage() {
               ))}
             </select>
           </label>
+          <label className="flex w-36 flex-col gap-1.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
+            Episode gap (hours)
+            <input
+              type="number"
+              min="0.25"
+              max="168"
+              step="0.25"
+              value={temporalGapHours}
+              onChange={(event) => setTemporalGapHours(Number(event.target.value))}
+              disabled={running}
+              className="h-10 rounded-lg border border-white/[0.09] bg-navy-950 px-3 text-xs normal-case tracking-normal text-slate-200 outline-none focus:border-accent-400/50 disabled:opacity-50"
+            />
+          </label>
           <button
             type="button"
             onClick={() => void runAnalysis()}
-            disabled={!datasetId || loadingDatasets || loadingHistory || running}
+            disabled={
+              !datasetId ||
+              loadingDatasets ||
+              loadingHistory ||
+              running ||
+              !Number.isFinite(temporalGapHours) ||
+              temporalGapHours <= 0 ||
+              temporalGapHours > 168
+            }
             className="inline-flex h-10 items-center justify-center gap-2 self-end rounded-lg bg-accent-400 px-4 text-xs font-semibold text-navy-950 transition hover:bg-accent-300 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {running ? (
@@ -458,88 +503,238 @@ export default function AnalysisPage() {
                 <div className="flex items-start gap-3">
                   <Activity size={18} className="mt-0.5 shrink-0 text-accent-400" />
                   <div>
-                    <h2 className="text-sm font-semibold text-slate-200">Similar text groups</h2>
+                    <h2 className="text-sm font-semibold text-slate-200">Narrative clusters &amp; temporal episodes</h2>
                     <p className="mt-1 text-xs text-slate-500">
-                      {metrics.narratives.length} patterns · up to {largestGroupSize} posts per group
+                      {metrics.narratives.length} clusters · {metrics.summary.temporal_episode_count ?? "legacy"} episodes
+                      {metrics.summary.narrative_evolution_count
+                        ? ` · ${metrics.summary.narrative_evolution_count} evolution transitions`
+                        : ""}{" "}
+                      · UTC
                     </p>
                   </div>
                 </div>
+                {hasLegacyNarratives && (
+                  <p className="mt-4 rounded-lg border border-sky-400/15 bg-sky-400/[0.04] p-3 text-[10px] leading-5 text-sky-200/80">
+                    Legacy saved run: temporal episode metadata was not recorded. Existing narrative groups and evidence remain available; episodes are not inferred for this run.
+                  </p>
+                )}
                 {metrics.narratives.length === 0 ? (
                   <p className="mt-6 text-xs text-slate-500">No similar text groups met the configured threshold.</p>
                 ) : (
-                  <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <div className="mt-5 grid gap-3 xl:grid-cols-2">
                     {metrics.narratives.map((group, index) => (
                       <article
                         key={group.id}
                         className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-4"
                       >
-                        <div className="flex items-start justify-between gap-3">
+                        <div className="flex flex-wrap items-start justify-between gap-4">
                           <div>
                             <p className="text-[10px] font-medium uppercase tracking-wide text-slate-500">
-                              Pattern {String(index + 1).padStart(2, "0")}
+                              Narrative cluster {String(index + 1).padStart(2, "0")}
                             </p>
-                            <p className="mt-1 text-2xl font-semibold tabular-nums text-slate-100">
-                              {group.post_count}
+                            <p className="mt-1 text-lg font-semibold text-slate-100">
+                              {group.label}
                             </p>
-                            <p className="text-[10px] text-slate-500">posts</p>
-                          </div>
-                          <div className="rounded-lg border border-accent-400/15 bg-accent-400/[0.06] px-2.5 py-2 text-right">
-                            <p className="text-sm font-semibold tabular-nums text-accent-300">
-                              {Math.round(group.mean_similarity * 100)}%
-                            </p>
-                            <p className="text-[9px] uppercase tracking-wide text-slate-500">similarity</p>
-                          </div>
-                        </div>
-                        <div className="mt-4 space-y-3">
-                          <div>
-                            <div className="mb-1.5 flex justify-between text-[9px] text-slate-500">
-                              <span>Relative group size</span>
-                              <span>{Math.round((group.post_count / largestGroupSize) * 100)}%</span>
-                            </div>
-                            <div
-                              className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]"
-                              role="img"
-                              aria-label={`${group.post_count} posts in this similarity group`}
-                            >
-                              <div
-                                className="h-full rounded-full bg-accent-400"
-                                style={{
-                                  width: `${Math.max(3, (group.post_count / largestGroupSize) * 100)}%`,
-                                }}
-                              />
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              {(group.top_terms ?? []).map((term) => (
+                                <span
+                                  key={term}
+                                  className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 text-[9px] text-slate-400"
+                                >
+                                  {term}
+                                </span>
+                              ))}
                             </div>
                           </div>
-                          <div>
-                            <div className="mb-1.5 flex justify-between text-[9px] text-slate-500">
-                              <span>Similarity score</span>
-                              <span>{group.mean_similarity.toFixed(2)}</span>
+                          <div className="grid grid-cols-2 gap-2 text-right">
+                            <div className="rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2">
+                              <p className="text-lg font-semibold tabular-nums text-slate-100">{group.post_count}</p>
+                              <p className="text-[9px] uppercase tracking-wide text-slate-500">total posts</p>
                             </div>
-                            <div
-                              className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]"
-                              role="img"
-                              aria-label={`Similarity score ${Math.round(group.mean_similarity * 100)} percent`}
-                            >
-                              <div
-                                className="h-full rounded-full bg-sky-400"
-                                style={{ width: `${Math.max(0, Math.min(100, group.mean_similarity * 100))}%` }}
-                              />
+                            <div className="rounded-lg border border-accent-400/15 bg-accent-400/[0.06] px-3 py-2">
+                              <p className="text-lg font-semibold tabular-nums text-accent-300">{group.episodes?.length ?? "—"}</p>
+                              <p className="text-[9px] uppercase tracking-wide text-slate-500">episodes</p>
                             </div>
                           </div>
                         </div>
-                        <p className="mt-3 text-[10px] text-slate-500">
-                          {formatDate(group.start_time)} – {formatDate(group.end_time)}
-                        </p>
-                        <details className="mt-3 border-t border-white/[0.06] pt-3">
-                          <summary className="cursor-pointer text-[10px] font-medium text-slate-400 hover:text-slate-200">
-                            View text &amp; {group.evidence.length} samples
-                          </summary>
-                          <p className="mt-3 text-xs leading-5 text-slate-300">
-                            {group.representative_text}
+                        <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-3">
+                          <p className="text-[10px] text-slate-400">
+                            Overall cluster range (UTC): {formatDate(group.start_time)} – {formatDate(group.end_time)}
                           </p>
-                          <div className="mt-3">
-                            <EvidenceList evidence={group.evidence} />
+                          <p className="text-[10px] text-slate-500">
+                            Mean similarity {group.mean_similarity.toFixed(2)} · threshold {metrics.summary.similarity_threshold.toFixed(2)}
+                          </p>
+                        </div>
+                        {group.episodes === undefined ? (
+                          <details className="mt-3 border-t border-white/[0.06] pt-3">
+                            <summary className="cursor-pointer text-[10px] font-medium text-slate-400 hover:text-slate-200">
+                              View legacy text &amp; {group.evidence.length} samples
+                            </summary>
+                            <p className="mt-3 text-xs leading-5 text-slate-300">{group.representative_text}</p>
+                            <div className="mt-3"><EvidenceList evidence={group.evidence} /></div>
+                          </details>
+                        ) : group.episodes.length > 0 ? (
+                          <div className="mt-3 space-y-2">
+                            {group.episodes.map((episode) => (
+                              <details
+                                key={episode.episode_id}
+                                className="rounded-lg border border-white/[0.07] bg-navy-950/40"
+                              >
+                                <summary className="cursor-pointer list-none p-3">
+                                  <span className="flex flex-wrap items-center justify-between gap-2">
+                                    <span className="text-xs font-semibold text-slate-200">{episode.label}</span>
+                                    <span className="text-[10px] text-slate-400">
+                                      {episode.post_count} posts · {episode.distinct_source_count} sources
+                                      {episode.volume_spike_detected && (
+                                        <span className="ml-2 rounded-full border border-amber-400/20 px-2 py-0.5 text-amber-300">
+                                          volume signal
+                                        </span>
+                                      )}
+                                    </span>
+                                  </span>
+                                  <span className="mt-1.5 block text-[10px] text-slate-500">
+                                    Episode range (UTC): {formatDate(episode.episode_start)} – {formatDate(episode.episode_end)}
+                                  </span>
+                                </summary>
+                                <div className="space-y-3 border-t border-white/[0.06] p-3">
+                                  <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Duration</p>
+                                      <p className="mt-1 text-xs text-slate-200">{formatDuration(episode.duration.seconds)}</p>
+                                    </div>
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Peak activity (UTC)</p>
+                                      <p className="mt-1 text-xs text-slate-200">{formatDate(episode.peak_hour)} · {episode.peak_post_count} posts</p>
+                                    </div>
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Gap rule</p>
+                                      <p className="mt-1 text-xs text-slate-200">{episode.temporal_gap_threshold} hr · similarity {episode.similarity_threshold.toFixed(2)}</p>
+                                    </div>
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Evidence IDs</p>
+                                      <p className="mt-1 text-xs text-slate-200">{episode.evidence_post_ids.length} original posts</p>
+                                    </div>
+                                  </div>
+                                  <p className="text-[10px] leading-5 text-slate-400">{episode.explanation}</p>
+                                  {episode.top_terms && episode.top_terms.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                      {episode.top_terms.map((term) => (
+                                        <span
+                                          key={term}
+                                          className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 text-[9px] text-slate-400"
+                                        >
+                                          {term}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <p className="text-[10px] text-slate-500">
+                                    Evidence support: {episode.evidence_sufficient ? "minimum episode support met (at least 2 posts)" : "below the minimum support for an episode"}.
+                                  </p>
+                                  <details className="border-t border-white/[0.06] pt-3">
+                                    <summary className="cursor-pointer text-[10px] font-medium text-accent-300 hover:text-accent-200">
+                                      View Evidence · {episode.representative_posts.length} representative posts
+                                    </summary>
+                                    <div className="mt-3">
+                                      <EvidenceList evidence={episode.representative_posts} />
+                                    </div>
+                                  </details>
+                                </div>
+                              </details>
+                            ))}
                           </div>
-                        </details>
+                        ) : (
+                          <p className="mt-3 rounded-lg bg-white/[0.03] p-3 text-[10px] leading-5 text-slate-500">
+                            No time-bounded group met the minimum of two posts. {group.unassigned_post_ids?.length ?? 0} isolated post(s) remain linked to this narrative cluster, but are not presented as an episode.
+                          </p>
+                        )}
+                        {group.episodes !== undefined && group.unassigned_post_ids && group.unassigned_post_ids.length > 0 && group.episodes.length > 0 && (
+                          <p className="mt-2 text-[9px] text-slate-600">
+                            {group.unassigned_post_ids.length} isolated post(s) remain unassigned to an episode.
+                          </p>
+                        )}
+                        {group.evolution && group.evolution.length > 0 && (
+                          <details className="mt-3 border-t border-white/[0.06] pt-3">
+                            <summary className="cursor-pointer text-[10px] font-medium text-slate-400 hover:text-slate-200">
+                              Narrative evolution · {group.evolution.length} episode transition
+                              {group.evolution.length === 1 ? "" : "s"}
+                            </summary>
+                            <div className="mt-3 space-y-2">
+                              {group.evolution.map((transition) => (
+                                <div
+                                  key={transition.transition_id}
+                                  className="rounded-lg border border-white/[0.07] bg-navy-950/40 p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-[10px] font-semibold text-slate-200">
+                                      {transition.from_label} → {transition.to_label}
+                                    </p>
+                                    <p className="text-[9px] text-slate-500">
+                                      {formatGapHours(transition.gap_between_episodes_hours)} hr apart · term overlap{" "}
+                                      {Math.round(transition.term_overlap_ratio * 100)}%
+                                    </p>
+                                  </div>
+                                  <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Volume shift</p>
+                                      <p className="mt-1 text-xs text-slate-200">
+                                        {transition.from_post_count} → {transition.to_post_count} posts
+                                        <span
+                                          className={
+                                            transition.volume_direction === "higher"
+                                              ? "ml-1 text-emerald-300"
+                                              : transition.volume_direction === "lower"
+                                                ? "ml-1 text-rose-300"
+                                                : "ml-1 text-slate-400"
+                                          }
+                                        >
+                                          ({transition.post_count_delta > 0 ? "+" : ""}
+                                          {transition.post_count_delta})
+                                        </span>
+                                      </p>
+                                    </div>
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Sources</p>
+                                      <p className="mt-1 text-xs text-slate-200">
+                                        {transition.to_source_count} total · {transition.new_source_count} new
+                                      </p>
+                                    </div>
+                                    <div className="rounded-md bg-white/[0.03] p-2">
+                                      <p className="text-[9px] text-slate-500">Terms</p>
+                                      <p className="mt-1 text-xs text-slate-200">
+                                        {transition.shared_terms.length} shared · {transition.introduced_terms.length} new
+                                      </p>
+                                    </div>
+                                  </div>
+                                  {(transition.introduced_terms.length > 0 ||
+                                    transition.dropped_terms.length > 0) && (
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
+                                      {transition.introduced_terms.map((term) => (
+                                        <span
+                                          key={`new-${term}`}
+                                          className="rounded-full border border-emerald-400/20 bg-emerald-400/[0.06] px-2 py-0.5 text-[9px] text-emerald-300"
+                                        >
+                                          + {term}
+                                        </span>
+                                      ))}
+                                      {transition.dropped_terms.map((term) => (
+                                        <span
+                                          key={`drop-${term}`}
+                                          className="rounded-full border border-white/[0.08] bg-white/[0.02] px-2 py-0.5 text-[9px] text-slate-500 line-through"
+                                        >
+                                          {term}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                  <p className="mt-2 text-[10px] leading-5 text-slate-400">
+                                    {transition.explanation}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
                       </article>
                     ))}
                   </div>
@@ -724,28 +919,55 @@ export default function AnalysisPage() {
                         </div>
                         <div>
                           <h4 className="text-xs font-semibold text-slate-200">
-                            Text groups sharing evidence samples
+                            Related narrative clusters and episodes
                           </h4>
                           {relatedNarratives.length > 0 ? (
                             <>
                               <ul className="mt-2 space-y-2">
-                                {relatedNarratives.map(({ group, sharedEvidenceCount }) => (
-                                  <li key={group.id} className="rounded-lg border border-white/[0.06] p-3">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <span className="text-xs text-slate-200">{group.label}</span>
-                                      <span className="text-[10px] text-slate-500">
-                                        {group.post_count} posts · similarity {group.mean_similarity.toFixed(2)}
-                                        {" · "}{sharedEvidenceCount} shared samples
-                                      </span>
-                                    </div>
-                                    <p className="mt-1 text-xs leading-5 text-slate-400">
-                                      {group.representative_text}
-                                    </p>
-                                  </li>
-                                ))}
+                                {relatedNarratives.flatMap(({ group, episodes, sharedEvidenceCount }) =>
+                                  episodes.length > 0
+                                    ? episodes.map((episode) => {
+                                        const sharedEpisodeEvidence = episode.evidence_post_ids.filter(
+                                          (id) => selectedSignalEvidenceIds.has(id),
+                                        ).length;
+                                        return (
+                                          <li key={episode.episode_id} className="rounded-lg border border-white/[0.06] p-3">
+                                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <span className="text-xs text-slate-200">
+                                                {group.label} · {episode.label}
+                                              </span>
+                                              <span className="text-[10px] text-slate-500">
+                                                {episode.post_count} posts · {sharedEpisodeEvidence} shared evidence samples
+                                              </span>
+                                            </div>
+                                            <p className="mt-1 text-[10px] text-slate-500">
+                                              Episode range (UTC): {formatDate(episode.episode_start)} – {formatDate(episode.episode_end)}
+                                            </p>
+                                            <p className="mt-2 text-xs leading-5 text-slate-400">
+                                              {episode.explanation}
+                                            </p>
+                                          </li>
+                                        );
+                                      })
+                                    : [
+                                        <li key={group.id} className="rounded-lg border border-white/[0.06] p-3">
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                            <span className="text-xs text-slate-200">{group.label}</span>
+                                            <span className="text-[10px] text-slate-500">
+                                              {group.post_count} posts · similarity {group.mean_similarity.toFixed(2)}
+                                              {" · "}{sharedEvidenceCount} shared samples
+                                            </span>
+                                          </div>
+                                          <p className="mt-1 text-xs leading-5 text-slate-400">
+                                            {group.representative_text}
+                                          </p>
+                                          <p className="mt-1 text-[9px] text-slate-500">Legacy group; episode metadata is unavailable.</p>
+                                        </li>,
+                                      ],
+                                )}
                               </ul>
                               <p className="mt-2 text-[10px] leading-5 text-slate-600">
-                                Shared samples indicate evidence overlap only; this does not establish a causal or coordinated relationship.
+                                A signal references only the episode(s) overlapping its evidence or time window. Association indicates evidence overlap only and does not establish a causal or coordinated relationship.
                               </p>
                             </>
                           ) : (

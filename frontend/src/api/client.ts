@@ -30,9 +30,12 @@ export function getDatasetAnalyses(datasetId: string): Promise<AnalysisRecord[]>
   return request<AnalysisRecord[]>(`/datasets/${encodeURIComponent(datasetId)}/analyses`);
 }
 
-export function createDatasetAnalysis(datasetId: string): Promise<AnalysisRecord> {
+export function createDatasetAnalysis(
+  datasetId: string,
+  temporalGapHours: number,
+): Promise<AnalysisRecord> {
   return request<AnalysisRecord>(
-    `/datasets/${encodeURIComponent(datasetId)}/analyses`,
+    `/datasets/${encodeURIComponent(datasetId)}/analyses?temporal_gap_hours=${encodeURIComponent(temporalGapHours)}`,
     { method: "POST" },
   );
 }
