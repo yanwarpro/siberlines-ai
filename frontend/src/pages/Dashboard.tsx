@@ -142,6 +142,7 @@ export default function Dashboard({ apiError, onOpenAlerts }: DashboardProps) {
         </Suspense>
         <AlertTable
           alerts={recentAlerts}
+          onSelect={() => onOpenAlerts()}
           emptyTitle="No alerts recorded"
           emptyHint="Run an analysis that produces a review signal to populate the alert queue."
         />
