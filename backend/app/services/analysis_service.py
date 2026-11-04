@@ -43,10 +43,14 @@ def _tokens(text: str) -> set[str]:
 
 def _evidence(post: Post) -> dict[str, Any]:
     timestamp = _utc_timestamp(post.timestamp)
+    source_url = post.source_url
+    if source_url is None and post.external_id and post.external_id.casefold().startswith("https://"):
+        source_url = post.external_id
     return {
         "post_id": str(post.id),
         "timestamp": timestamp.isoformat(),
         "source_id": post.source_id,
+        "source_url": source_url,
         "text": post.text,
     }
 

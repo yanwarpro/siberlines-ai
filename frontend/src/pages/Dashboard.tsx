@@ -4,7 +4,13 @@ import AlertTable from "../components/AlertTable";
 import EvidencePanel from "../components/EvidencePanel";
 import MetricCard from "../components/MetricCard";
 import { getAlertSummary, getAlerts } from "../api/client";
-import type { AlertListItem, AlertSummary, Metric } from "../types";
+import type {
+  AlertListItem,
+  AlertSummary,
+  EvidenceRecord,
+  Metric,
+  SignalActivityPoint,
+} from "../types";
 
 const TrendChart = lazy(() => import("../components/TrendChart"));
 
@@ -14,6 +20,60 @@ interface DashboardProps {
 }
 
 const RECENT_ALERT_LIMIT = 5;
+const ALERT_PAGE_SIZE = 100;
+const EVIDENCE_SAMPLE_LIMIT = 5;
+
+function buildSignalActivity(alerts: AlertListItem[]): SignalActivityPoint[] {
+  const signalsByDay = new Map<string, Set<string>>();
+
+  for (const alert of alerts) {
+    const detectedAt = alert.detected_at ?? alert.detection_interval_start;
+    if (!detectedAt) continue;
+
+    const detectedDate = new Date(detectedAt);
+    if (Number.isNaN(detectedDate.getTime())) continue;
+
+    const day = detectedDate.toISOString().slice(0, 10);
+    const detectionWindow = `${alert.narrative_key}|${detectedDate.toISOString()}`;
+    const signals = signalsByDay.get(day) ?? new Set<string>();
+    signals.add(detectionWindow);
+    signalsByDay.set(day, signals);
+  }
+
+  return [...signalsByDay.entries()]
+    .sort(([firstDay], [secondDay]) => firstDay.localeCompare(secondDay))
+    .map(([timestamp, signals]) => ({ timestamp, count: signals.size }));
+}
+
+function buildEvidence(alerts: AlertListItem[]): EvidenceRecord[] {
+  const latestAlert = alerts.find((alert) => alert.evidence_json.length > 0);
+  if (!latestAlert) return [];
+
+  return latestAlert.evidence_json.slice(0, EVIDENCE_SAMPLE_LIMIT).map((item, index) => ({
+    id: index,
+    description: item.text,
+    source: [latestAlert.dataset_name, item.source_id].filter(Boolean).join(" · ") || "Source unavailable",
+    capturedAt: item.timestamp,
+    sourceUrl: item.source_url,
+    postId: item.post_id,
+    alertTitle:
+      latestAlert.narrative_key === "hourly_volume_spike"
+        ? "Hourly volume spike"
+        : latestAlert.narrative_key,
+  }));
+}
+
+async function getAllAlerts(): Promise<AlertListItem[]> {
+  const firstPage = await getAlerts({ limit: ALERT_PAGE_SIZE, offset: 0 });
+  const alerts = [...firstPage.items];
+
+  for (let offset = firstPage.limit; offset < firstPage.total; offset += ALERT_PAGE_SIZE) {
+    const page = await getAlerts({ limit: ALERT_PAGE_SIZE, offset });
+    alerts.push(...page.items);
+  }
+
+  return alerts;
+}
 
 function buildMetrics(summary: AlertSummary | null): Metric[] {
   if (!summary) {
@@ -51,21 +111,27 @@ function buildMetrics(summary: AlertSummary | null): Metric[] {
 export default function Dashboard({ apiError, onOpenAlerts }: DashboardProps) {
   const [summary, setSummary] = useState<AlertSummary | null>(null);
   const [recentAlerts, setRecentAlerts] = useState<AlertListItem[]>([]);
+  const [signalActivity, setSignalActivity] = useState<SignalActivityPoint[]>([]);
+  const [evidence, setEvidence] = useState<EvidenceRecord[]>([]);
   const [overviewError, setOverviewError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setOverviewError(null);
-    Promise.all([getAlertSummary(), getAlerts({ limit: RECENT_ALERT_LIMIT, offset: 0 })])
-      .then(([summaryRecord, page]) => {
+    Promise.all([getAlertSummary(), getAllAlerts()])
+      .then(([summaryRecord, alertRecords]) => {
         if (!active) return;
         setSummary(summaryRecord);
-        setRecentAlerts(page.items);
+        setRecentAlerts(alertRecords.slice(0, RECENT_ALERT_LIMIT));
+        setSignalActivity(buildSignalActivity(alertRecords));
+        setEvidence(buildEvidence(alertRecords));
       })
       .catch((loadError: unknown) => {
         if (!active) return;
         setSummary(null);
         setRecentAlerts([]);
+        setSignalActivity([]);
+        setEvidence([]);
         setOverviewError(
           loadError instanceof Error ? loadError.message : "Alert overview could not be loaded.",
         );
@@ -138,7 +204,7 @@ export default function Dashboard({ apiError, onOpenAlerts }: DashboardProps) {
             </section>
           }
         >
-          <TrendChart data={[]} />
+          <TrendChart data={signalActivity} />
         </Suspense>
         <AlertTable
           alerts={recentAlerts}
@@ -159,7 +225,7 @@ export default function Dashboard({ apiError, onOpenAlerts }: DashboardProps) {
       </div>
 
       <div className="mt-4">
-        <EvidencePanel evidence={[]} />
+        <EvidencePanel evidence={evidence} onOpenAlerts={onOpenAlerts} />
       </div>
     </div>
   );

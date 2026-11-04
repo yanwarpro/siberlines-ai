@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.db.session import get_db
 from app.models import Alert, Analysis, Dataset, Post
 from app.schemas.analysis import AnalysisDetail, AnalystNote, AnalystNoteCreate
@@ -16,7 +17,7 @@ from app.services.analysis_service import (
     analyze_posts,
 )
 
-router = APIRouter(tags=["analyses"])
+router = APIRouter(tags=["analyses"], dependencies=[Depends(get_current_user)])
 
 
 def _analysis_detail(db: Session, analysis: Analysis) -> AnalysisDetail:

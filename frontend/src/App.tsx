@@ -2,19 +2,23 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Activity,
   Bell,
-  ChevronDown,
   CircleHelp,
   Database,
   LayoutDashboard,
+  LogOut,
   Menu,
   Radar,
-  Settings,
+  Rss,
   X,
 } from "lucide-react";
+import type { Session } from "@supabase/supabase-js";
 import { getHealth } from "./api/client";
+import { supabase } from "./api/supabase";
+import AuthScreen from "./components/AuthScreen";
 import AlertsPage from "./pages/AlertsPage";
 import Dashboard from "./pages/Dashboard";
 import DatasetPage from "./pages/DatasetPage";
+import RssSourcesPage from "./pages/RssSourcesPage";
 import type { PageName } from "./types";
 
 const AnalysisPage = lazy(() => import("./pages/AnalysisPage"));
@@ -24,6 +28,7 @@ const navigation: { label: string; page: PageName; icon: typeof LayoutDashboard 
   { label: "Analysis", page: "analysis", icon: Activity },
   { label: "Alerts", page: "alerts", icon: Bell },
   { label: "Datasets", page: "datasets", icon: Database },
+  { label: "RSS Sources", page: "rss", icon: Rss },
 ];
 
 const pageTitles: Record<PageName, string> = {
@@ -31,9 +36,13 @@ const pageTitles: Record<PageName, string> = {
   datasets: "Datasets",
   analysis: "Analysis",
   alerts: "Alerts",
+  rss: "RSS Sources",
 };
 
 function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [page, setPage] = useState<PageName>("overview");
   const [apiStatus, setApiStatus] = useState<"checking" | "online" | "offline">("checking");
@@ -47,6 +56,40 @@ function App() {
   }, []);
 
   const clearAnalysisFocus = useCallback(() => setAnalysisFocusId(null), []);
+
+  useEffect(() => {
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
+    }
+
+    let active = true;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (active) {
+        setSession(nextSession);
+        setAuthError(null);
+        setAuthLoading(false);
+      }
+    });
+    void supabase.auth.getSession().then(({ data, error }) => {
+      if (!active) return;
+      if (error) {
+        setAuthError(error.message);
+      } else {
+        setSession(data.session);
+      }
+      setAuthLoading(false);
+    }).catch((error: unknown) => {
+      if (active) {
+        setAuthError(error instanceof Error ? error.message : "Tidak dapat memeriksa sesi.");
+        setAuthLoading(false);
+      }
+    });
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -67,6 +110,8 @@ function App() {
 
   function renderPage() {
     switch (page) {
+      case "rss":
+        return <RssSourcesPage />;
       case "datasets":
         return <DatasetPage />;
       case "analysis":
@@ -89,6 +134,18 @@ function App() {
           />
         );
     }
+  }
+
+  if (authLoading) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-navy-950 text-sm text-slate-400" role="status">
+        Memeriksa sesi aman…
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <AuthScreen authError={authError} />;
   }
 
   return (
@@ -156,19 +213,31 @@ function App() {
               Built to support early awareness and responsible response.
             </p>
           </div>
-          <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-slate-500">
-            <Settings size={17} strokeWidth={1.8} />
-            Settings (not configured)
-          </div>
           <div className="mt-4 flex items-center gap-3 border-t border-white/[0.07] pt-5">
             <div className="grid h-9 w-9 place-items-center rounded-full bg-slate-800 text-xs font-semibold text-slate-300">
-              SL
+              {(session.user.email?.slice(0, 2) ?? "SL").toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium text-slate-200">Analyst workspace</p>
-              <p className="mt-1 text-[10px] text-slate-500">Prototype environment</p>
+              <p className="truncate text-xs font-medium text-slate-200">{session.user.email}</p>
+              <p className="mt-1 text-[10px] text-slate-500">Signed in</p>
             </div>
-            <ChevronDown size={15} className="text-slate-500" />
+            <button
+              type="button"
+              onClick={() => {
+                void supabase?.auth.signOut().then(({ error }) => {
+                  if (error) setAuthError(error.message);
+                }).catch((error: unknown) => {
+                  setAuthError(
+                    error instanceof Error ? error.message : "Tidak dapat mengakhiri sesi.",
+                  );
+                });
+              }}
+              aria-label="Sign out"
+              title="Sign out"
+              className="rounded-lg p-2 text-slate-500 transition hover:bg-white/[0.05] hover:text-slate-200"
+            >
+              <LogOut size={15} />
+            </button>
           </div>
         </div>
       </aside>
@@ -224,6 +293,12 @@ function App() {
             </button>
           </div>
         </header>
+
+        {authError && (
+          <div className="mx-5 mt-4 rounded-lg border border-rose-400/20 bg-rose-400/[0.06] px-4 py-3 text-xs text-rose-200 sm:mx-8" role="alert">
+            {authError}
+          </div>
+        )}
 
         <Suspense
           fallback={

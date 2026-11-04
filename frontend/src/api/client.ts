@@ -9,23 +9,42 @@ import type {
   AnalystNote,
   DatasetRecord,
   HealthResponse,
+  RssFeedRecord,
+  RssSyncRun,
+  RssSyncResult,
+  RssSyncStatus,
 } from "../types";
+import { supabase } from "./supabase";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1").replace(
   /\/$/,
   "",
 );
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+  authenticated = true,
+): Promise<T> {
+  const sessionResult = authenticated ? await supabase?.auth.getSession() : null;
+  const accessToken = sessionResult?.data.session?.access_token;
+  if (authenticated && !accessToken) {
+    throw new Error("Please sign in before accessing the API.");
+  }
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
-    headers: { Accept: "application/json", ...init?.headers },
+    headers: {
+      Accept: "application/json",
+      ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+      ...init?.headers,
+    },
   });
 
   if (!response.ok) {
     throw new Error(await describeFailure(response));
   }
 
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
@@ -64,7 +83,7 @@ function buildQuery(params: Record<string, string | number | undefined>): string
 }
 
 export function getHealth(): Promise<HealthResponse> {
-  return request<HealthResponse>("/health");
+  return request<HealthResponse>("/health", undefined, false);
 }
 
 export function getDatasets(): Promise<DatasetRecord[]> {
@@ -160,4 +179,45 @@ export function createAlertNote(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ body }),
   });
+}
+
+export function getRssFeeds(): Promise<RssFeedRecord[]> {
+  return request<RssFeedRecord[]>("/rss-feeds");
+}
+
+export function createRssFeed(payload: { name: string; url: string }): Promise<RssFeedRecord> {
+  return request<RssFeedRecord>("/rss-feeds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateRssFeed(
+  feedId: string,
+  payload: { name?: string; url?: string; enabled?: boolean },
+): Promise<RssFeedRecord> {
+  return request<RssFeedRecord>(`/rss-feeds/${encodeURIComponent(feedId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteRssFeed(feedId: string): Promise<void> {
+  return request<void>(`/rss-feeds/${encodeURIComponent(feedId)}`, { method: "DELETE" });
+}
+
+export function syncRssFeed(feedId: string): Promise<RssSyncResult> {
+  return request<RssSyncResult>(`/rss-feeds/${encodeURIComponent(feedId)}/sync`, {
+    method: "POST",
+  });
+}
+
+export function getRssSyncStatus(): Promise<RssSyncStatus> {
+  return request<RssSyncStatus>("/rss-sync/status");
+}
+
+export function getRssSyncHistory(limit = 10): Promise<RssSyncRun[]> {
+  return request<RssSyncRun[]>(`/rss-sync/history${buildQuery({ limit })}`);
 }

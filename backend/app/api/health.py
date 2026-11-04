@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.db.session import get_db
 
 router = APIRouter()
@@ -24,7 +25,10 @@ def health() -> HealthResponse:
 
 
 @router.get("/health/db", response_model=DatabaseHealthResponse)
-def database_health(db: Session = Depends(get_db)) -> DatabaseHealthResponse:
+def database_health(
+    db: Session = Depends(get_db),
+    _user: dict[str, str] = Depends(get_current_user),
+) -> DatabaseHealthResponse:
     try:
         db.execute(text("SELECT 1"))
     except SQLAlchemyError as error:

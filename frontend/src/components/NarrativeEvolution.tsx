@@ -27,6 +27,7 @@ import type {
   AnalysisTemporalEpisode,
   AnalystNote,
 } from "../types";
+import { getSafeSourceUrl } from "./alertPresentation";
 
 function formatUtc(value: string): string {
   const date = new Date(value);
@@ -98,6 +99,16 @@ function QuotedPost({
         {evidence.source_id ?? "Unknown source"} · {formatUtc(evidence.timestamp)} UTC ·
         post {evidence.post_id.slice(0, 8)}
       </p>
+      {getSafeSourceUrl(evidence.source_url) && (
+        <a
+          href={getSafeSourceUrl(evidence.source_url) ?? undefined}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 inline-block text-[10px] text-accent-300 hover:text-accent-200"
+        >
+          Open original source
+        </a>
+      )}
     </div>
   );
 }

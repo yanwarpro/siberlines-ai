@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.db.base import Base
+from app.core.auth import get_current_user
+from app.services.rss_sync_service import get_rss_sync_lock
 from app.db.session import get_db
 from app.main import app
 
@@ -29,10 +31,17 @@ def api_client() -> Generator[tuple[TestClient, sessionmaker[Session]], None, No
             yield session
 
     app.dependency_overrides[get_db] = override_get_db
+    app.dependency_overrides[get_current_user] = lambda: {
+        "id": "test-analyst",
+        "email": "analyst@example.test",
+    }
+    app.dependency_overrides[get_rss_sync_lock] = lambda: True
     try:
         with TestClient(app) as client:
             yield client, test_session
     finally:
         app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_rss_sync_lock, None)
         Base.metadata.drop_all(engine)
         engine.dispose()

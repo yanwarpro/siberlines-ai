@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.db.session import get_db
 from app.models import Alert, Analysis, Dataset
 from app.models.alert import ALERT_STATUSES
@@ -21,7 +22,11 @@ from app.schemas.alert import (
 )
 from app.services.alert_service import add_analyst_note, apply_status_change
 
-router = APIRouter(prefix="/alerts", tags=["alerts"])
+router = APIRouter(
+    prefix="/alerts",
+    tags=["alerts"],
+    dependencies=[Depends(get_current_user)],
+)
 
 RESOLVED_STATUSES = ("resolved", "dismissed")
 HIGH_PRIORITY_SEVERITIES = ("high", "critical")

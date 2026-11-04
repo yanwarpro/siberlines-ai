@@ -1,4 +1,4 @@
-export type PageName = "overview" | "datasets" | "analysis" | "alerts";
+export type PageName = "overview" | "datasets" | "analysis" | "alerts" | "rss";
 
 export interface HealthResponse {
   status: string;
@@ -102,6 +102,9 @@ export interface EvidenceRecord {
   description: string;
   source: string;
   capturedAt: string;
+  sourceUrl?: string | null;
+  postId?: string;
+  alertTitle?: string;
 }
 
 export interface DatasetRecord {
@@ -111,6 +114,62 @@ export interface DatasetRecord {
   row_count: number;
   status: string;
   created_at: string;
+}
+
+export interface RssFeedRecord {
+  id: string;
+  name: string;
+  url: string;
+  enabled: boolean;
+  dataset_id: string | null;
+  dataset_name: string | null;
+  row_count: number;
+  last_synced_at: string | null;
+  last_sync_status: string | null;
+  last_sync_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RssSyncResult {
+  feed_id: string;
+  dataset_id: string;
+  items_received: number;
+  items_inserted: number;
+  duplicates_skipped: number;
+  invalid_items: number;
+  synced_at: string;
+}
+
+export type RssSyncState =
+  | "running"
+  | "successful"
+  | "partial_success"
+  | "failed";
+
+export interface RssSyncRun {
+  id: string;
+  trigger_type: "manual" | "scheduled";
+  status: RssSyncState;
+  source_feed_id: string | null;
+  source_name: string | null;
+  started_at: string;
+  completed_at: string | null;
+  total_sources: number;
+  successful_sources: number;
+  failed_sources: number;
+  items_received: number;
+  new_articles: number;
+  duplicate_articles: number;
+  invalid_articles: number;
+  error_summary: string | null;
+}
+
+export interface RssSyncStatus {
+  schedule_enabled: boolean;
+  schedule_interval_minutes: number;
+  next_scheduled_at: string | null;
+  latest_run: RssSyncRun | null;
 }
 
 export interface AnalystNote {
@@ -137,6 +196,7 @@ export interface AnalysisEvidence {
   post_id: string;
   timestamp: string;
   source_id: string | null;
+  source_url?: string | null;
   text: string;
 }
 

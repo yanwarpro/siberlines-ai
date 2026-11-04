@@ -23,6 +23,7 @@ import {
   getDatasetAnalyses,
   getDatasets,
 } from "../api/client";
+import { getSafeSourceUrl } from "../components/alertPresentation";
 import { NarrativeEvolutionSection } from "../components/NarrativeEvolution";
 import type {
   AnalysisAlert,
@@ -71,6 +72,16 @@ function EvidenceList({ evidence }: { evidence: AnalysisEvidence[] }) {
           <p className="mt-1 text-[10px] text-slate-500">
             {item.source_id ?? "Unknown source"} · {formatDate(item.timestamp)}
           </p>
+          {getSafeSourceUrl(item.source_url) && (
+            <a
+              href={getSafeSourceUrl(item.source_url) ?? undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-1 inline-block text-[10px] text-accent-300 hover:text-accent-200"
+            >
+              Open original source
+            </a>
+          )}
         </li>
       ))}
     </ul>

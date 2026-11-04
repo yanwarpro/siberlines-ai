@@ -28,6 +28,7 @@ class Post(Base):
     external_id: Mapped[str | None] = mapped_column(String(150))
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_id: Mapped[str | None] = mapped_column(String(100))
+    source_url: Mapped[str | None] = mapped_column(String(2048))
     text: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     topic_label: Mapped[str | None] = mapped_column(String(150))

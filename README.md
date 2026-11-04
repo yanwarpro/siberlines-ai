@@ -1,6 +1,6 @@
 # SIBERLENS AI
 
-SIBERLENS AI is a defensive social cyber intelligence early-warning prototype. This monorepo contains a React dashboard and a FastAPI service backed by PostgreSQL. It accepts authorized CSV uploads and runs deterministic TF-IDF similarity and hourly-volume analysis. It does not collect social data, call an LLM, or provide authentication.
+SIBERLENS AI is a defensive social cyber intelligence early-warning prototype. This monorepo contains a React dashboard and a FastAPI service backed by PostgreSQL. It accepts authorized CSV uploads and analyst-managed HTTPS RSS feeds, and runs deterministic TF-IDF similarity and hourly-volume analysis. Supabase Auth protects data and management endpoints.
 
 ## Repository layout
 
@@ -8,12 +8,12 @@ SIBERLENS AI is a defensive social cyber intelligence early-warning prototype. T
 backend/
   alembic/                 Database migration environment and revisions
   app/
-    api/                   Versioned health endpoint
+    api/                   Versioned health, analysis, alert, RSS, and sync endpoints
     core/                  Environment-backed settings
     db/                    SQLAlchemy engine and session
     models/                SQLAlchemy data models
     schemas/               Pydantic read schemas
-    services/              Scope notes for deferred processing services
+    services/              RSS ingestion/scheduling, analysis, and alert services
   tests/                   Backend tests
 frontend/
   src/
@@ -34,6 +34,7 @@ scripts/                   Local development utilities
 - Python 3.10+
 - Node.js 20+
 - PostgreSQL 15+
+- Supabase project with Auth enabled
 
 ## Local development (Windows PowerShell)
 
@@ -45,6 +46,8 @@ Create a PostgreSQL database named `siberlens` and replace the `YOUR_USER` / `YO
 
 ```powershell
 Copy-Item .env.example .env
+# Set SUPABASE_URL and SUPABASE_ANON_KEY in .env to the project URL
+# and publishable/anon key. Never use a service-role key.
 cd backend
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -73,6 +76,47 @@ The Compose stack does not include the frontend container. Run Vite using the fr
 
 The health endpoint is `GET http://localhost:8000/api/v1/health`. It reports application liveness and does not claim that PostgreSQL is reachable.
 
+Before starting the Vite frontend, configure `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and `VITE_API_BASE_URL` in the frontend environment (for local development, create `frontend/.env.local`). The backend validates every bearer token against Supabase Auth. The frontend anon key is public by design; the Supabase service-role key must never be exposed in frontend or Netlify settings.
+
+Run `alembic upgrade head` before starting the API. Migration `0005_rss_feed_management` adds RSS source metadata and original source URLs, and seeds the approved CISA and UK NCSC feed configurations with empty datasets. It does not import feed entries.
+
+### RSS source management
+
+After signing in, use **RSS Sources** to add an HTTPS feed, enable/disable it, synchronize it, or remove its configuration. Adding a source creates an empty `rss_feed` dataset immediately. **Synchronize now** imports at most 100 current feed items (headline and up to 500 characters of description) into its posts, keeping the original HTTPS article link and UTC publication timestamp. Re-syncs deduplicate by a SHA-256 identity of the source URL. Imported datasets then appear in Datasets and can be analyzed like CSV datasets. Removing a source preserves its dataset, posts, and analyses; it only removes the source configuration.
+
+RSS fetching blocks non-HTTPS URLs, non-standard ports, credentials in URLs, DNS results that are not public IPs, and redirects. Connections are pinned to the validated public IP while preserving TLS hostname verification. Feed URLs are limited to 512 characters; a sync processes a maximum of 4 MiB and stores no full article body. Failed syncs remain visible with an error. Synchronization is not a real-time stream, and syncing does not automatically run analysis or create alerts.
+
+Supabase Auth must be enabled. Analysts can sign in or create accounts using email/password; set the allowed redirect URLs for local Vite and the deployed Netlify site in Supabase Auth settings. Every signed-in account currently has workspace-wide analyst access; this prototype does not implement per-user dataset ownership or role-based permissions.
+
+### Scheduled RSS synchronization
+
+The API supports both the existing manual per-feed endpoint (`POST /api/v1/rss-feeds/{feed_id}/sync`) and a protected all-enabled-feeds endpoint (`POST /api/v1/rss-sync/scheduled`). The scheduled route requires the `X-RSS-Sync-Secret` header and returns a persisted run summary. Signed-in users can read `GET /api/v1/rss-sync/status` and `GET /api/v1/rss-sync/history?limit=10`. Sync runs record their trigger, times, overall status, counts, and per-feed error summary. Feed failures do not prevent other enabled feeds from being processed.
+
+Duplicate prevention canonicalizes article URLs by removing fragments, lowercasing the hostname, normalizing the default HTTPS port, and using the normalized URL's SHA-256 as `posts.external_id`. The existing unique index on `(dataset_id, source_id, external_id)` is enforced at PostgreSQL level; inserts use `ON CONFLICT DO NOTHING`, so concurrent inserts cannot duplicate an article. Existing `source_url` values are also checked in normalized form for compatibility with prior RSS imports.
+
+The synchronization lock is a PostgreSQL transaction-scoped advisory lock shared by scheduled and manual sync requests. A concurrent request receives HTTP `409` instead of starting another run. A process-local lock is used only for SQLite tests/development; production must use PostgreSQL.
+
+#### Required database migration
+
+Apply Alembic revision `0006_rss_sync_history` before deploying this backend version. For the existing Supabase database already at revision `0005`, review and run [`backend/scripts/supabase_0006_rss_sync_history.sql`](./backend/scripts/supabase_0006_rss_sync_history.sql) once in the Supabase SQL editor. Alternatively, databases managed and stamped by Alembic can run `alembic upgrade head`. This additive migration creates only `rss_sync_runs` and its indexes, enables RLS, and preserves existing feed, post, dataset, and analysis records. Do not use both migration paths for the same database.
+
+#### Configure a Render Cron Job (manual dashboard setup)
+
+The code and UI do **not** make synchronization automatic by themselves. Create and enable a separate Render **Cron Job** from the same repository:
+
+1. Select the repository and branch used by the backend. Set **Root Directory** to `backend`.
+2. Set **Build Command** to `pip install .` and **Command** to `python scripts/run_scheduled_rss_sync.py`.
+3. Set the schedule to `0 * * * *` (hourly, at minute 0 UTC).
+4. Add Cron Job environment variables:
+   - `RSS_SYNC_API_URL=https://<your-render-api-host>/api/v1/rss-sync/scheduled`
+   - `RSS_SYNC_SECRET=<the same randomly generated secret as on the API>`
+5. Add these environment variables to the Render API service as well:
+   - `RSS_SYNC_SECRET=<same secret>` — keep it in Render's secret environment, never in Netlify or any `VITE_` variable. Generate a value with `python -c "import secrets; print(secrets.token_urlsafe(48))"` and paste it into both Render services.
+   - `RSS_SYNC_SCHEDULE_ENABLED=true` — enables the UI's hourly schedule estimate after the Cron Job has actually been configured and enabled.
+6. Deploy the API after applying the database migration; deploy the Cron Job and confirm its first execution in the Render Events/Logs view. The runner has a 15-minute HTTP timeout, emits a summary without printing the secret, and exits nonzero for failed/overlapping runs. Do not enable the dashboard schedule flag before the Cron Job is active.
+
+Keep the existing per-feed **Synchronize now** button for manual operation. RSS sync imports source articles only; it does not automatically run analyses, generate alerts, verify claims, or provide real-time social-media monitoring.
+
 ### CSV dataset upload
 
 `POST /api/v1/datasets/upload` accepts a multipart form with a `.csv` `file` and an optional `name`. It creates a UUID dataset and stores post rows in one database transaction. CSV headers must include `timestamp` and `text`; `source_id` and `external_id` are optional. Timestamp values must be ISO 8601. Header matching is case-insensitive and accepts common aliases (`published_at` for timestamp, `content` for text, and `source`/`platform` for source_id). Optional `dataset_label` and `expected_topic` evaluation columns are accepted but ignored. Files are limited to 5 MiB and 10,000 rows. Repeated text is preserved as separate posts; duplicate rows are skipped only when both `source_id` and `external_id` match. The upload is rejected as a whole if a row is invalid; uploading does not automatically run analysis or create alerts.
@@ -85,7 +129,7 @@ curl.exe -X POST http://localhost:8000/api/v1/datasets/upload `
   -F "name=Authorized sample"
 ```
 
-The CSV endpoint accepts uploads only from configured CORS origins when called by a browser. CORS is not authentication; do not expose this prototype API publicly for sensitive data without adding an appropriate access-control mechanism.
+The CSV endpoint requires a valid Supabase Auth bearer token. CORS is an additional browser-origin restriction, not a substitute for authentication.
 
 ### Dataset read and database health endpoints
 
@@ -93,7 +137,7 @@ The CSV endpoint accepts uploads only from configured CORS origins when called b
 - `GET /api/v1/datasets?limit=50&offset=0` lists dataset metadata and stored row counts; `limit` is capped at 100.
 - `GET /api/v1/datasets/{dataset_id}` returns the same metadata for one UUID dataset, or HTTP 404 when it does not exist.
 
-Dataset read responses deliberately omit descriptions, post text, authors, and raw uploaded rows because these routes do not require authentication. Do not treat this metadata-only design or CORS as access control; add authentication and authorization before using the public API for confidential datasets.
+Dataset and post-related API routes require a valid Supabase Auth bearer token. All signed-in accounts currently share workspace-wide analyst access; per-user ownership and role-based permissions are not implemented.
 
 ### Persisted dataset analysis
 
@@ -128,7 +172,7 @@ Analyst notes are stored in the `analyses.notes_json` column, added by revision 
 
 The Analysis page renders this as a **Narrative evolution** section: a chronological episode timeline with a selector, keyword evolution chips plus an expandable presence matrix, verbatim context comparisons, an observed-volume line chart, a source distribution bar chart, and an analyst notes panel. All displayed times are labelled `UTC`. Runs saved before episode metadata existed show a legacy notice instead of synthesised episodes.
 
-Analysis responses include representative raw post text as evidence. The prototype API has no authentication or per-user authorization; do not upload confidential or personally sensitive posts to a publicly reachable deployment.
+Analysis responses include representative raw post text as evidence. The API requires authentication, but all signed-in accounts currently share workspace-wide access; do not upload data requiring per-user isolation until ownership and role-based access are implemented.
 
 ### 2. Run the frontend
 
@@ -142,7 +186,7 @@ npm run dev
 
 Open the Vite URL (normally `http://localhost:5173`). Set `VITE_API_BASE_URL` in the frontend environment when the API is hosted somewhere other than `http://localhost:8000/api/v1`. Vite reads its own `.env` files from `frontend/`.
 
-The backend reads `DATABASE_URL` and `CORS_ORIGINS` from the process environment or a root `.env` file. `DATABASE_URL_DOCKER` configures the API container's database connection through the Compose service name. `CORS_ORIGINS` is a comma-separated allowlist of exact origins; wildcard origins are not accepted. The example allows `http://localhost:5173` and `http://127.0.0.1:5173`.
+The backend reads `DATABASE_URL`, `CORS_ORIGINS`, and server-only Supabase/RSS settings from the process environment or a root `.env` file. `DATABASE_URL_DOCKER` configures the API container's database connection through the Compose service name. `CORS_ORIGINS` is a comma-separated allowlist of exact origins; wildcard origins are not accepted. The example allows `http://localhost:5173` and `http://127.0.0.1:5173`.
 
 ## Database schema
 
@@ -152,14 +196,16 @@ The initial Alembic revision creates:
 - `posts`: UUID dataset-linked records with timestamps, source IDs, text, and content hashes; the latest migration preserves repeated text and deduplicates only matching source/external IDs.
 - `analyses`: dataset-linked run status, JSON configuration/metrics, completion timestamps, and analyst notes.
 - `alerts`: analysis-linked volume signals with baseline counts and JSON evidence.
+- `rss_feeds`: analyst-managed feed configuration and its associated dataset, added by revision `0005`.
+- `rss_sync_runs`: persisted manual/scheduled synchronization status and result counts, added by revision `0006`.
 
 Temporal episode, keyword evolution, and context comparison metadata are stored within the existing `analyses.metrics_json` JSONB result, and the selected gap is recorded in `analyses.config_json`. Analyst notes live in `analyses.notes_json`, a non-null JSONB column with an empty-array server default added by revision `0003_analysis_analyst_notes`. That revision is the only schema change introduced by narrative evolution tracking, and it is required because notes must survive page reloads independently of the automated result.
 
 For a new database, apply migrations with `alembic upgrade head` from `backend/`. The migrations enable row-level security but do not add policies; use a trusted backend database role with the required table privileges, and do not expose database credentials to the frontend.
 
-The existing Supabase database was created outside Alembic and has no `alembic_version` table. Do not run `alembic upgrade head` against it: that attempts to create tables that already exist. Only after independently verifying that its tables, columns, types, defaults, indexes, constraints, and RLS state match revision `0001_initial`, mark that baseline from `backend/` with `alembic stamp 0001_initial`, then run `alembic upgrade head` to apply later revisions. `stamp` does not apply or validate schema changes. If the schema differs, reconcile it deliberately first. To roll a new database back by one revision, use `alembic downgrade -1`.
+For an existing Supabase database created outside Alembic, do not run `alembic upgrade head` until its schema and migration baseline have been verified. The additive SQL for RSS support is in [`backend/scripts/supabase_0005_rss_feeds.sql`](./backend/scripts/supabase_0005_rss_feeds.sql). Review and run it once in the Supabase SQL editor. It adds `posts.source_url`, creates `rss_feeds` with RLS enabled, and inserts the two default feed configurations and empty datasets; it does not import posts. For databases properly stamped at the current revision, use `alembic upgrade head`.
 
-Revision `0003_analysis_analyst_notes` must be applied before deploying a backend that reads or writes analyst notes, otherwise note requests fail against the missing `notes_json` column. Two paths are supported:
+Revisions `0003_analysis_analyst_notes`, `0005_rss_feed_management`, and `0006_rss_sync_history` must be applied before deploying a backend that reads/writes notes, RSS feeds, or RSS synchronization history, otherwise those requests fail because of missing columns/tables. The existing hosted database has SQL scripts for these additive RSS revisions as noted above.
 
 - **Alembic path** (a database already stamped at `0001_initial` or created from `alembic upgrade head`): run `alembic upgrade head` from `backend/`.
 - **Supabase SQL path** (the existing hosted database): run [backend/scripts/supabase_0003_analyst_notes.sql](backend/scripts/supabase_0003_analyst_notes.sql) once in the Supabase SQL editor. The script is idempotent, adds `notes_json jsonb NOT NULL DEFAULT '[]'::jsonb`, backfills existing rows with an empty array, and includes the verification query and rollback statement.
@@ -173,15 +219,16 @@ Applying `0003` is safe for existing saved runs: they return `notes_json: []` an
 1. Provision a managed PostgreSQL instance from your hosting provider and create a database/user with least-privilege access.
 2. Deploy the `backend/` directory as a Python 3.10+ application. Install with `pip install .` and run `uvicorn app.main:app --host 0.0.0.0 --port $PORT` from that directory (adapt the port variable syntax to the provider).
 3. Configure `DATABASE_URL` as a secret environment variable using the provider's PostgreSQL connection URL. Use `postgresql+psycopg://` and URL-encode reserved characters in credentials.
-4. Configure `CORS_ORIGINS` to the exact deployed frontend origin(s), without a trailing path or wildcard.
-5. For a newly provisioned empty database only, run `alembic upgrade head` as a release/pre-deploy command from `backend/` before routing traffic to the new version. For an existing Supabase database, follow the schema verification and stamping guidance above instead.
-6. Configure a platform health check to request `/api/v1/health`.
+4. Configure backend `SUPABASE_URL` and `SUPABASE_ANON_KEY` using the Supabase project URL and publishable/anon key. These let the API validate user sessions with Supabase Auth; never use the service-role key. Ensure Supabase Auth is enabled and set the site's allowed redirect URLs.
+5. Configure `CORS_ORIGINS` to the exact deployed frontend origin(s), without a trailing path or wildcard.
+6. For a newly provisioned empty database only, run `alembic upgrade head` as a release/pre-deploy command from `backend/` before routing traffic to the new version. For an existing Supabase database, follow the schema verification and SQL-script guidance above instead.
+7. Configure a platform health check to request `/api/v1/health`.
 
 ### Frontend
 
 For Netlify, connect the repository root; the checked-in [`netlify.toml`](./netlify.toml) sets the monorepo base to `frontend/`, build command to `npm run build`, publish directory to `dist`, and Node.js version to 20. If entering settings manually in the Netlify UI, use those same values.
 
-1. Configure only frontend variables in Netlify. Set `VITE_API_BASE_URL` to `https://<your-api-host>/api/v1`; this is a public API URL, not a database URL or secret. Remove backend-only variables such as `DATABASE_URL`, `DATABASE_URL_DOCKER`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `CORS_ORIGINS` from the Netlify site/build environment. They belong only in the backend deployment. Trigger a new deploy after changing environment variables.
+1. Configure only frontend variables in Netlify. Set `VITE_API_BASE_URL` to `https://<your-api-host>/api/v1`, plus `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`. The Supabase publishable/anon key is intended for browser use; never use the service-role key. Remove backend-only variables such as `DATABASE_URL`, `DATABASE_URL_DOCKER`, `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `CORS_ORIGINS`, and `SUPABASE_ANON_KEY` from Netlify. Trigger a new deploy after changing environment variables.
 2. Add the Netlify site's exact origin (for example, `https://<site-name>.netlify.app`) to the backend's `CORS_ORIGINS`, then redeploy/restart the backend. Do not include a path or trailing slash.
 3. Check the Netlify deploy log for a successful Vite build and confirm the publish directory is `frontend/dist` (or `dist` relative to the configured `frontend` base).
 
@@ -193,4 +240,4 @@ Never put database credentials or other server secrets in frontend variables; Vi
 
 The architecture, scope proposal, verification plan, and demo walkthrough are in `docs/`. To write an explicitly synthetic local CSV fixture, run `python scripts/generate_demo_dataset.py` from the repository root. The generated file is ignored by Git and is not loaded by the application.
 
-From `backend/`, run `python -m pytest`. From `frontend/`, run `npm run build` and `npm run lint`. Analytics, data ingestion, and report generation remain unimplemented; their planned service layer is intentionally documented rather than filled with placeholder results.
+From `backend/`, run `python -m pytest`. From `frontend/`, run `npm run build` and `npm run lint`. Scheduled polling requires the separate Render Cron Job described above; until Render is configured and enabled, RSS collection remains user-triggered.

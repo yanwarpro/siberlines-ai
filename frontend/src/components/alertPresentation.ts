@@ -75,3 +75,13 @@ export function formatUtcDate(value: string | null | undefined): string {
     timeZone: "UTC",
   }).format(date);
 }
+
+export function getSafeSourceUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}

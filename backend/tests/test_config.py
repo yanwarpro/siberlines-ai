@@ -33,6 +33,46 @@ def test_database_url_rejects_non_postgresql_scheme() -> None:
         Settings(_env_file=None, database_url="sqlite:///local.db")
 
 
+def test_supabase_url_requires_https_on_standard_port() -> None:
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql+psycopg://db.example/siberlens",
+        supabase_url="https://project.supabase.co/",
+    )
+    assert settings.supabase_url == "https://project.supabase.co"
+
+    for url in ("http://project.supabase.co", "https://user:pass@project.supabase.co"):
+        with pytest.raises(ValidationError, match="SUPABASE_URL must be an HTTPS origin"):
+            Settings(
+                _env_file=None,
+                database_url="postgresql+psycopg://db.example/siberlens",
+                supabase_url=url,
+            )
+
+
+def test_scheduled_rss_requires_a_long_secret() -> None:
+    database_url = "postgresql+psycopg://db.example/siberlens"
+    with pytest.raises(ValidationError, match="at least 32 characters"):
+        Settings(
+            _env_file=None,
+            database_url=database_url,
+            rss_sync_secret="too-short",
+        )
+    with pytest.raises(ValidationError, match="RSS_SYNC_SECRET is required"):
+        Settings(
+            _env_file=None,
+            database_url=database_url,
+            rss_sync_schedule_enabled=True,
+        )
+    settings = Settings(
+        _env_file=None,
+        database_url=database_url,
+        rss_sync_schedule_enabled=True,
+        rss_sync_secret="a-random-secret-with-more-than-thirty-two-characters",
+    )
+    assert settings.rss_sync_schedule_enabled is True
+
+
 def test_cors_origins_parse_comma_separated_values() -> None:
     settings = Settings(_env_file=None, cors_origins="https://app.example, http://localhost:5173")
 

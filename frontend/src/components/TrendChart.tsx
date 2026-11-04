@@ -14,21 +14,31 @@ interface TrendChartProps {
   data: SignalActivityPoint[];
 }
 
+function formatUtcDate(value: string): string {
+  const date = new Date(`${value}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(date);
+}
+
 export default function TrendChart({ data }: TrendChartProps) {
   return (
     <section className="panel-card min-h-[350px] p-5 sm:p-6">
       <div>
         <h2 className="text-sm font-semibold text-slate-200">Signal activity</h2>
-        <p className="mt-1 text-xs text-slate-500">Activity over time</p>
+        <p className="mt-1 text-xs text-slate-500">Unique detection windows per day · UTC</p>
       </div>
       {data.length === 0 ? (
         <div className="flex h-[250px] flex-col items-center justify-center">
           <div className="grid h-12 w-12 place-items-center rounded-2xl border border-white/[0.07] bg-white/[0.025] text-slate-600">
             <Activity size={21} strokeWidth={1.5} />
           </div>
-          <p className="mt-4 text-sm font-medium text-slate-400">No signal activity yet</p>
+          <p className="mt-4 text-sm font-medium text-slate-400">No dated signals available</p>
           <p className="mt-1 max-w-xs text-center text-xs leading-5 text-slate-600">
-            A chart will appear when real, authorized data is available.
+            Activity appears when stored alerts include a valid detection time.
           </p>
         </div>
       ) : (
@@ -42,9 +52,19 @@ export default function TrendChart({ data }: TrendChartProps) {
                 </linearGradient>
               </defs>
               <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
-              <XAxis dataKey="timestamp" tick={{ fill: "#64748b", fontSize: 10 }} />
-              <YAxis allowDecimals={false} tick={{ fill: "#64748b", fontSize: 10 }} />
+              <XAxis
+                dataKey="timestamp"
+                tick={{ fill: "#64748b", fontSize: 10 }}
+                tickFormatter={formatUtcDate}
+                minTickGap={24}
+              />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fill: "#64748b", fontSize: 10 }}
+              />
               <Tooltip
+                labelFormatter={(label) => `${formatUtcDate(String(label))} UTC`}
+                formatter={(value) => [value, "Detection windows"]}
                 contentStyle={{
                   background: "#0b1727",
                   border: "1px solid rgba(255,255,255,0.1)",

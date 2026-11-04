@@ -5,11 +5,16 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.db.session import get_db
 from app.models import Dataset
 from app.schemas.dataset import DatasetSummary
 
-router = APIRouter(prefix="/datasets", tags=["datasets"])
+router = APIRouter(
+    prefix="/datasets",
+    tags=["datasets"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 def _dataset_summary_statement():

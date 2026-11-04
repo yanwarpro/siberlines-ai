@@ -11,6 +11,7 @@ import type { AlertDetail, AlertStatus } from "../types";
 import {
   ALERT_STATUS_LABELS,
   formatUtcTimestamp,
+  getSafeSourceUrl,
   isAlertStatus,
   isClosedStatus,
   severityStyle,
@@ -238,6 +239,16 @@ export default function AlertDetailPanel({
                       {item.source_id ?? "Unknown source"} · {formatUtcTimestamp(item.timestamp)} ·
                       post {item.post_id}
                     </p>
+                    {getSafeSourceUrl(item.source_url) && (
+                      <a
+                        href={getSafeSourceUrl(item.source_url) ?? undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-block text-[10px] text-accent-300 hover:text-accent-200"
+                      >
+                        Open original source
+                      </a>
+                    )}
                   </li>
                 ))}
               </ul>

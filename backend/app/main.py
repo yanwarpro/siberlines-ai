@@ -9,7 +9,10 @@ from app.api.alerts import router as alerts_router
 from app.api.analyses import router as analyses_router
 from app.api.datasets import router as datasets_router
 from app.api.health import router as health_router
+from app.api.rss_sync import router as rss_sync_router
 from app.core.config import get_settings
+from app.api.rss_feeds import router as rss_feeds_router
+from app.core.auth import get_current_user
 from app.db.session import get_db
 from app.models import Dataset, Post
 from app.services.csv_service import parse_posts_csv
@@ -24,11 +27,13 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PATCH", "DELETE"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 app.include_router(health_router, prefix="/api/v1", tags=["health"])
 app.include_router(analyses_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")
+app.include_router(rss_feeds_router, prefix="/api/v1")
+app.include_router(rss_sync_router, prefix="/api/v1")
 
 
 @app.post("/api/v1/datasets/upload", status_code=status.HTTP_201_CREATED)
@@ -36,6 +41,7 @@ async def upload_dataset(
     file: UploadFile = File(...),
     name: str | None = Form(default=None, max_length=200),
     db: Session = Depends(get_db),
+    _user: dict[str, str] = Depends(get_current_user),
 ) -> dict[str, int | str]:
     try:
         if not file.filename or Path(file.filename).suffix.casefold() != ".csv":
